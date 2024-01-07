@@ -3,8 +3,9 @@
 A classe `HttpPromise` oferece uma maneira assíncrona de realizar requisições HTTP usando cURL, retornando Promises para operações assíncronas.
 
 ## Instalação
-
-Para utilizar esta classe, você precisa integrá-la ao seu projeto PHP. Você pode fazer isso incluindo o arquivo `HttpPromise.php` em seu projeto ou usando um sistema de autoload.
+```bash
+git clone https://github.com/omegaalfa/HttpPromise.git
+```
 
 ## Requisitos
 
