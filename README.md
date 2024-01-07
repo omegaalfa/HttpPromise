@@ -4,7 +4,7 @@ A classe `HttpPromise` oferece uma maneira assíncrona de realizar requisições
 
 ## Instalação
 ```bash
-git clone https://github.com/omegaalfa/HttpPromise.git
+composer require omegaalfa/http-promise
 ```
 
 ## Requisitos
