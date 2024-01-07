@@ -8,7 +8,7 @@ Para utilizar esta classe, você precisa integrá-la ao seu projeto PHP. Você p
 
 ## Requisitos
 
-- PHP 7.0 ou superior
+- PHP 8.0 ou superior
 - Extensão cURL habilitada
 
 ## Uso
