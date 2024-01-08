@@ -9,7 +9,7 @@ composer require omegaalfa/http-promise
 
 ## Requisitos
 
-- PHP 8.0 ou superior
+- PHP 8.1 ou superior
 - Extensão cURL habilitada
 
 ## Métodos Disponíveis
