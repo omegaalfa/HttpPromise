@@ -2,14 +2,27 @@
 
 namespace src\http;
 
+use Exception;
 use Laminas\Diactoros\Response;
 use src\promises\Promise;
 
-/**
- *
- */
+
 class HttpPromise
 {
+	/**
+	 * array
+	 */
+	private const VALID_HTTP_METHODS
+		= [
+			'GET',
+			'POST',
+			'PUT',
+			'DELETE',
+			'HEAD',
+			'OPTIONS',
+			'TRACE',
+			'CONNECT',
+		];
 
 	/**
 	 * @var Response
@@ -26,6 +39,58 @@ class HttpPromise
 	public function __construct()
 	{
 		$this->response = new Response();
+	}
+
+
+	/**
+	 * @param  string      $method
+	 * @param  string      $url
+	 * @param  mixed|null  $params
+	 * @param  array       $headers
+	 *
+	 * @return Promise
+	 */
+	public function request(string $method, string $url, mixed $params = null, array $headers = []): Promise
+	{
+		if(!$this->validMethod($method)) {
+			throw  new \InvalidArgumentException('METHOD REQUEST INVALID');
+		}
+		try {
+			$promise = new Promise(function($resolve, $reject) use ($method, $url, $params, $headers) {
+				$ch = curl_init($url);
+				curl_setopt($ch, CURLOPT_USERAGENT, "Mozilla/4.0 (compatible; MSIE 5.01; Windows NT 5.0)");
+				curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+				curl_setopt($ch, CURLOPT_CUSTOMREQUEST, $method);
+				curl_setopt($ch, CURLOPT_FOLLOWLOCATION, true);
+				curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+				curl_setopt($ch, CURLOPT_ENCODING, 'utf-8');
+				curl_setopt($ch, CURLOPT_PROXYPORT, "80");
+				curl_setopt($ch, CURLOPT_CERTINFO, true);
+				curl_setopt($ch, CURLOPT_PROXYTYPE, CURLPROXY_SOCKS5);
+				curl_setopt($ch, CURLOPT_HTTPHEADER, $this->getProcessHeaders($headers));
+				curl_setopt($ch, CURLOPT_POSTFIELDS, $this->getProcessParams($params, $headers));
+
+				if(is_string($content = curl_exec($ch))) {
+					$code = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+					$response = $this->response->withStatus($code ?? 200);
+					$response->getBody()->write($content);
+					$response->getBody()->rewind();
+				}
+				$error = curl_error($ch);
+				curl_close($ch);
+
+				if($response) {
+					$resolve($response);
+				}
+				if($error) {
+					$reject($error);
+				}
+			});
+		} catch(Exception $e) {
+			$promise->reject($e->getMessage());
+		}
+
+		return $promise;
 	}
 
 	/**
@@ -61,54 +126,7 @@ class HttpPromise
 					$reject($error);
 				}
 			});
-		} catch(\Exception $e) {
-			$promise->reject($e->getMessage());
-		}
-
-		return $promise;
-	}
-
-	/**
-	 * @param  string      $method
-	 * @param  string      $url
-	 * @param  mixed|null  $params
-	 * @param  array       $headers
-	 *
-	 * @return Promise
-	 */
-	public function request(string $method, string $url, mixed $params = null, array $headers = []): Promise
-	{
-		try {
-			$promise = new Promise(function($resolve, $reject) use ($method, $url, $params, $headers) {
-				$ch = curl_init($url);
-				curl_setopt($ch, CURLOPT_USERAGENT, "Mozilla/4.0 (compatible; MSIE 5.01; Windows NT 5.0)");
-				curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
-				curl_setopt($ch, CURLOPT_CUSTOMREQUEST, $method);
-				curl_setopt($ch, CURLOPT_FOLLOWLOCATION, true);
-				curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
-				curl_setopt($ch, CURLOPT_ENCODING, 'utf-8');
-				curl_setopt($ch, CURLOPT_PROXYPORT, "80");
-				curl_setopt($ch, CURLOPT_CERTINFO, true);
-				curl_setopt($ch, CURLOPT_PROXYTYPE, CURLPROXY_SOCKS5);
-				curl_setopt($ch, CURLOPT_HTTPHEADER, $this->getProcessHeaders($headers));
-				curl_setopt($ch, CURLOPT_POSTFIELDS, $this->getProcessParams($params, $headers));
-				if(is_string($content = curl_exec($ch))) {
-					$code = curl_getinfo($ch, CURLINFO_HTTP_CODE);
-					$response = $this->response->withStatus($code ?? 200);
-					$response->getBody()->write($content);
-					$response->getBody()->rewind();
-				}
-				$error = curl_error($ch);
-				curl_close($ch);
-
-				if($response) {
-					$resolve($response);
-				}
-				if($error) {
-					$reject($error);
-				}
-			});
-		} catch(\Exception $e) {
+		} catch(Exception $e) {
 			$promise->reject($e->getMessage());
 		}
 
@@ -159,18 +177,19 @@ class HttpPromise
 	 *
 	 * @return bool|mixed|string
 	 */
-	private function getProcessParams(mixed $params, array $headers = null): mixed
+	private function getProcessParams(mixed $params = '', array $headers = null): mixed
 	{
 		$data = $params;
+
 		if(!$headers) {
-			$headers = ['Content-Type:text/html; charset=utf-8'];
+			$headers['Content-Type'] = 'text/html; charset=utf-8';
 		}
 
-		if(isset($headers['Content-Type'])) {
+		if(is_array($params) || is_object($params)) {
 			$data = urldecode(http_build_query($data));
 		}
 
-		if(str_contains($headers['Content-Type'], 'json')) {
+		if($params && isset($headers['Content-Type']) && str_contains($headers['Content-Type'], 'json')) {
 			$data = $this->toJson($params);
 		}
 
@@ -210,5 +229,20 @@ class HttpPromise
 		}
 
 		return $this->headers;
+	}
+
+
+	/**
+	 * @param  string  $method
+	 *
+	 * @return bool
+	 */
+	private function validMethod(string $method): bool
+	{
+		if(in_array($method, self::VALID_HTTP_METHODS)) {
+			return true;
+		}
+
+		return false;
 	}
 }
