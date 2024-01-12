@@ -12,8 +12,7 @@ class HttpPromise
 	/**
 	 * array
 	 */
-	private const VALID_HTTP_METHODS
-		= [
+	private const VALID_HTTP_METHODS = [
 			'GET',
 			'POST',
 			'PUT',
@@ -22,7 +21,7 @@ class HttpPromise
 			'OPTIONS',
 			'TRACE',
 			'CONNECT',
-		];
+	];
 
 	/**
 	 * @var Response
@@ -55,6 +54,7 @@ class HttpPromise
 		if(!$this->validMethod($method)) {
 			throw  new \InvalidArgumentException('METHOD REQUEST INVALID');
 		}
+
 		try {
 			$promise = new Promise(function($resolve, $reject) use ($method, $url, $params, $headers) {
 				$ch = curl_init($url);
