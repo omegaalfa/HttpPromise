@@ -1,6 +1,6 @@
 <?php
 
-namespace src\http;
+namespace omegaalfa\HttpPromise;
 
 use Exception;
 use Laminas\Diactoros\Response;
