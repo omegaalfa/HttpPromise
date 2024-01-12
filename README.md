@@ -62,7 +62,7 @@ Estes são alguns dos principais métodos oferecidos pela classe `HttpPromise` p
 ### Exemplo de utilização:
 
 ```php
-use src\http\HttpPromise;
+use omegaalfa\HttpPromise;
 
 $http = new HttpPromise();
 
