@@ -4,7 +4,7 @@ namespace omegaalfa\HttpPromise;
 
 use Exception;
 use Laminas\Diactoros\Response;
-use omegaalfa\Promise;
+use omegaalfa\HttpPromise\Promise;
 
 
 class HttpPromise
