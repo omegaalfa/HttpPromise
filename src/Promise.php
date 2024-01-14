@@ -1,6 +1,6 @@
 <?php
 
-namespace omegaalfa\Promise;
+namespace omegaalfa\HttpPromise;
 
 use Exception;
 use Fiber;
