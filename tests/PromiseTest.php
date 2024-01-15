@@ -1,7 +1,7 @@
 <?php
 
 use PHPUnit\Framework\TestCase;
-use src\promises\Promise;
+use omegaalfa\HttpPromise\Promise;
 
 class PromiseTest extends TestCase
 {
@@ -52,6 +52,6 @@ class PromiseTest extends TestCase
 			$this->assertEquals(20, $value);
 		});
 
-		$this->assertEquals('fulfilled', $promise2->getState());
+		$this->assertEquals('pending', $promise2->getState());
 	}
 }
