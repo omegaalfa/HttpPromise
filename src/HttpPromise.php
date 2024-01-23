@@ -81,7 +81,7 @@ class HttpPromise
 				$error = curl_error($ch);
 				curl_close($ch);
 
-				if($response) {
+				if(isset($response)) {
 					$resolve($response);
 				}
 				if($error) {
