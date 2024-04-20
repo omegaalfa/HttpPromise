@@ -2,6 +2,7 @@
   "name": "omegaalfa/http-promise",
   "description": "Library for handling HTTP requests asynchronously using promises.",
   "license": "MIT",
+  "version": "1.0",
   "authors": [
     {
       "name": "wrt",
