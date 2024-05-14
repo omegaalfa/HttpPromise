@@ -17,9 +17,9 @@ class ClientHttp extends SchedulerCurl
 {
 
 	/**
-	 * @var mixed
+	 * @var ClientHttp|null
 	 */
-	protected static $instance;
+	protected static ?ClientHttp $instance = null;
 
 
 	/**
@@ -37,8 +37,8 @@ class ClientHttp extends SchedulerCurl
 	}
 
 	/**
-	 * @param  string  $url
-	 * @param  array   $headers
+	 * @param  string                                         $url
+	 * @param  array<int|string, bool|float|int|string|null>  $headers
 	 *
 	 * @return SchedulerCurl
 	 */
@@ -49,9 +49,9 @@ class ClientHttp extends SchedulerCurl
 
 
 	/**
-	 * @param  string  $url
-	 * @param  array   $headers
-	 * @param  mixed   $params
+	 * @param  string                                         $url
+	 * @param  array<int|string, bool|float|int|string|null>  $headers
+	 * @param  mixed                                          $params
 	 *
 	 * @return $this
 	 */
@@ -61,9 +61,9 @@ class ClientHttp extends SchedulerCurl
 	}
 
 	/**
-	 * @param  string  $url
-	 * @param  array   $headers
-	 * @param  mixed   $params
+	 * @param  string                                         $url
+	 * @param  array<int|string, bool|float|int|string|null>  $headers
+	 * @param  mixed                                          $params
 	 *
 	 * @return $this
 	 */
@@ -73,9 +73,9 @@ class ClientHttp extends SchedulerCurl
 	}
 
 	/**
-	 * @param  string  $url
-	 * @param  array   $headers
-	 * @param  mixed   $params
+	 * @param  string                                         $url
+	 * @param  array<int|string, bool|float|int|string|null>  $headers
+	 * @param  mixed                                          $params
 	 *
 	 * @return $this
 	 */
