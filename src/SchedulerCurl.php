@@ -10,9 +10,7 @@ use Exception;
 use Psr\Http\Message\ResponseInterface;
 use RuntimeException;
 
-/**
- *
- */
+
 class SchedulerCurl
 {
 	/**
@@ -20,13 +18,9 @@ class SchedulerCurl
 	 */
 	protected CurlMultiHandle $curlMultiHandle;
 
-	/**
-	 * @var array
-	 */
-	protected array $handles = [];
 
 	/**
-	 * @var array
+	 * @var array<int|string, mixed>
 	 */
 	private array $headers;
 
@@ -57,16 +51,19 @@ class SchedulerCurl
 	}
 
 	/**
-	 * @param  string      $method
-	 * @param  string      $url
-	 * @param  array       $headers
-	 * @param  mixed|null  $params
+	 * @param  string                                         $method
+	 * @param  string                                         $url
+	 * @param  array<int|string, bool|float|int|string|null>  $headers
+	 * @param  mixed|null                                     $params
 	 *
 	 * @return $this
 	 */
 	public function request(string $method, string $url, array $headers, mixed $params = null): static
 	{
 		$ch = curl_init($url);
+		if(!$ch instanceof CurlHandle) {
+			throw new RuntimeException('Error: $ch is not instanceof CurlHandle');
+		}
 		curl_setopt($ch, CURLOPT_CUSTOMREQUEST, $method);
 		curl_setopt($ch, CURLOPT_USERAGENT, "Mozilla/4.0 (compatible; MSIE 5.01; Windows NT 5.0)");
 		curl_setopt($ch, CURLOPT_ENCODING, 'utf-8');
@@ -85,14 +82,14 @@ class SchedulerCurl
 
 	/**
 	 * @param  callable  $done
-	 * @param  float     $usleep
+	 * @param  int       $usleep
 	 *
 	 * @return void
 	 * @throws Exception
 	 */
-	public function then(callable $done, float $usleep = 20000): void
+	public function then(callable $done, int $usleep = 20000): void
 	{
-		$active = null;
+		$active = 0;
 		do {
 			$mrc = curl_multi_exec($this->curlMultiHandle, $active);
 			curl_multi_select($this->curlMultiHandle);
@@ -107,9 +104,12 @@ class SchedulerCurl
 			$response->getBody()->rewind();
 			while($info = curl_multi_info_read($this->curlMultiHandle)) {
 				$curlHandle = $info['handle'];
-				$code = curl_getinfo($curlHandle, CURLINFO_HTTP_CODE);
-				$response = $response->withStatus($code ?? 200);
-				$response->getBody()->write(curl_multi_getcontent($curlHandle));
+				if($code = (int)curl_getinfo($curlHandle, CURLINFO_HTTP_CODE)) {
+					$response = $response->withStatus($code);
+				}
+				if($content = curl_multi_getcontent($curlHandle)) {
+					$response->getBody()->write($content);
+				}
 				curl_multi_remove_handle($this->curlMultiHandle, $curlHandle);
 				curl_close($curlHandle);
 			}
@@ -120,16 +120,15 @@ class SchedulerCurl
 
 	/**
 	 * @param  callable  $done
-	 * @param  bool      $active
-	 * @param  float     $usleep
+	 * @param  int       $active
+	 * @param  int       $usleep
 	 *
 	 * @return void
 	 * @throws Exception
 	 */
-	private function waitForCompletion(callable $done, bool $active, float $usleep): void
+	private function waitForCompletion(callable $done, int $active, int $usleep): void
 	{
-		if($active === false) {
-			// We're done!
+		if($active === 0) {
 			$done();
 			return;
 		}
@@ -140,9 +139,9 @@ class SchedulerCurl
 
 
 	/**
-	 * @param  array  $headers
+	 * @param  array<int|string,  bool|float|int|string|null>  $headers
 	 *
-	 * @return array
+	 * @return array<int|string, mixed>
 	 */
 	private function getProcessHeaders(array $headers): array
 	{
@@ -152,7 +151,9 @@ class SchedulerCurl
 
 		if($headers) {
 			foreach($headers as $name => $value) {
-				$this->headers[] = sprintf('%s: %s', $name, $value);
+				if($value) {
+					$this->headers[] = sprintf('%s: %s', $name, $value);
+				}
 			}
 		}
 
@@ -160,8 +161,8 @@ class SchedulerCurl
 	}
 
 	/**
-	 * @param  mixed  $params
-	 * @param  array  $headers
+	 * @param  mixed                     $params
+	 * @param  array<int|string, mixed>  $headers
 	 *
 	 * @return false|mixed|string
 	 */
@@ -173,11 +174,14 @@ class SchedulerCurl
 			$headers['Content-Type'] = 'text/html; charset=utf-8';
 		}
 
-		if(is_array($params) || is_object($params)) {
+		if(is_array($data) || is_object($data)) {
 			$data = urldecode(http_build_query($data));
 		}
 
-		if($params && isset($headers['Content-Type']) && str_contains($headers['Content-Type'], 'json')) {
+		if($params
+			&& isset($headers['Content-Type'])
+			&& is_string($headers['Content-Type'])
+			&& str_contains($headers['Content-Type'], 'json')) {
 			try {
 				$data = json_encode($params, JSON_THROW_ON_ERROR);
 			} catch(\JsonException $e) {
@@ -197,3 +201,4 @@ class SchedulerCurl
 		curl_multi_close($this->curlMultiHandle);
 	}
 }
+
