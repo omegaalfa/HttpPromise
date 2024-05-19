@@ -78,7 +78,7 @@ $http->get('https://api.exemplo.com')
             echo 'Erro na requisição: ' . $error;
         }
     );
-$http->->wait();
+$http->wait();
 ```
 
 ## Contribuição
