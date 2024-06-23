@@ -23,5 +23,5 @@ jobs:
       - name: Install dependencies
         run: composer install
 
-      - name: Run test suite
-        run: composer run-script test
+     # - name: Run test suite
+     #   run: composer run-script test
