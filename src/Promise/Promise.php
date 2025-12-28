@@ -89,9 +89,11 @@ final class Promise implements PromiseInterface
     }
 
     /**
+     * Attaches callbacks for the resolution and/or rejection of the Promise.
+     * 
      * @param callable|null $onFulfilled
      * @param callable|null $onRejected
-     * @return PromiseInterface
+     * @return PromiseInterface<mixed>
      */
     public function then(?callable $onFulfilled = null, ?callable $onRejected = null): PromiseInterface
     {

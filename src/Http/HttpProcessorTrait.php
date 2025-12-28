@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Omegaalfa\HttpPromise\Http;
 
+use InvalidArgumentException;
 use JsonException;
 use RuntimeException;
 
@@ -17,6 +18,7 @@ trait HttpProcessorTrait
      *
      * @param array<string, string|int|float|bool|null> $headers Associative array of headers
      * @return array<int, string> Formatted headers for cURL
+     * @throws InvalidArgumentException If header name or value is invalid
      */
     protected function formatHeaders(array $headers): array
     {
@@ -26,15 +28,64 @@ trait HttpProcessorTrait
             if ($value === '' || $value === null) {
                 continue;
             }
+            
+            // Validar tipo do valor
+            if (!is_scalar($value)) {
+                throw new InvalidArgumentException(sprintf(
+                    'Header value must be scalar, %s given for "%s"',
+                    get_debug_type($value),
+                    $name
+                ));
+            }
 
             if (is_bool($value)) {
                 $value = $value ? 'true' : 'false';
             }
+            
+            // Sanitizar nome e valor (CRLF injection protection)
+            $name = $this->sanitizeHeaderName((string)$name);
+            $value = $this->sanitizeHeaderValue((string)$value);
 
-            $formatted[] = sprintf('%s: %s', $name, (string)$value);
+            $formatted[] = sprintf('%s: %s', $name, $value);
         }
 
         return $formatted;
+    }
+    
+    /**
+     * Sanitizes header name to prevent injection attacks.
+     *
+     * @param string $name
+     * @return string
+     * @throws InvalidArgumentException
+     */
+    private function sanitizeHeaderName(string $name): string
+    {
+        // RFC 7230: header name = token
+        if (!preg_match('/^[!#$%&\'*+\-.0-9A-Z^_`a-z|~]+$/', $name)) {
+            throw new InvalidArgumentException("Invalid header name: {$name}");
+        }
+        return $name;
+    }
+    
+    /**
+     * Sanitizes header value to prevent CRLF injection.
+     *
+     * @param string $value
+     * @return string
+     * @throws InvalidArgumentException
+     */
+    private function sanitizeHeaderValue(string $value): string
+    {
+        // Remover CRLF e caracteres de controle
+        $value = str_replace(["\r", "\n", "\0"], '', $value);
+        
+        // RFC 7230: field-value
+        if (!preg_match('/^[\x20-\x7E\x80-\xFF]*$/', $value)) {
+            throw new InvalidArgumentException('Invalid header value: contains invalid characters');
+        }
+        
+        return trim($value);
     }
 
     /**

@@ -193,9 +193,18 @@ final class RequestOptions
 
     /**
      * Returns options with SSL verification disabled.
+     * 
+     * WARNING: This disables TLS certificate verification and makes connections
+     * vulnerable to man-in-the-middle attacks. ONLY use in development/testing.
+     * NEVER use in production environments.
      */
     public function withoutSSLVerification(): self
     {
+        // Log critical security warning (exceto durante testes)
+        if (!defined('PHPUNIT_COMPOSER_INSTALL') && !class_exists(\PHPUnit\Framework\TestCase::class, false)) {
+            error_log('[SECURITY WARNING] SSL verification disabled - vulnerable to MITM attacks. Only use in development!');
+        }
+        
         return $this->with(['verifySSL' => false]);
     }
 

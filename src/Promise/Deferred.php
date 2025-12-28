@@ -27,6 +27,9 @@ final class Deferred
 
     /** @var callable|null */
     private mixed $waitFn = null;
+    
+    /** @var bool */
+    private bool $settled = false;
 
     /**
      * @param callable|null $waitFn Optional function to call when wait() is invoked on the promise
@@ -55,22 +58,32 @@ final class Deferred
 
     /**
      * Resolves the promise with a value.
+     * Can only be called once - subsequent calls are ignored.
      *
      * @param T $value
      */
     public function resolve(mixed $value = null): void
     {
+        if ($this->settled) {
+            return;
+        }
+        $this->settled = true;
         ($this->resolveCallback)($value);
     }
 
     /**
      * Rejects the promise with a reason.
+     * Can only be called once - subsequent calls are ignored.
      *
      * @param Throwable $reason
      * @return void
      */
     public function reject(Throwable $reason): void
     {
+        if ($this->settled) {
+            return;
+        }
+        $this->settled = true;
         ($this->rejectCallback)($reason);
     }
 
