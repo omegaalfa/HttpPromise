@@ -9,42 +9,37 @@ use Omegaalfa\HttpPromise\Exception\TimeoutException;
 use Throwable;
 
 /**
- * A Promise/A+ like implementation for PHP.
+ * A Promise/A+ like implementation for PHP with support for synchronous operations.
  *
  * @template T The type of the resolved value
  * @implements PromiseInterface<T>
  */
 final class Promise implements PromiseInterface
 {
+    /** @var string Current state of the promise */
     protected string $state = self::STATE_PENDING;
 
-    /** @var T|Throwable|null */
+    /** @var T|Throwable|null Result value or rejection reason */
     protected mixed $result = null;
 
-    /** @var array<array{callable|null, callable|null, callable, callable}> */
+    /** @var array<array{callable|null, callable|null, callable, callable}> Handler queue for then/catch */
     protected array $handlers = [];
 
-    /** @var callable|null */
+    /** @var callable|null Function to call when wait() is invoked */
     protected $waitFn = null;
-
-    /** @var callable|null */
-    protected mixed $cancelFn = null;
 
     /**
      * Creates a new Promise.
      *
-     * @param callable(callable(T): void, callable(Throwable): void): void $executor
-     * @param callable|null $waitFn Optional function to call when wait() is invoked
-     * @param callable|null $cancelFn Optional function to call when cancel() is invoked
+     * @param callable(callable(T): void, callable(Throwable): void): void $executor Function that receives resolve and reject callbacks
+     * @param callable|null $waitFn Optional function to call when wait() is invoked (for processing events)
      */
     public function __construct(
         callable  $executor,
-        ?callable $waitFn = null,
-        ?callable $cancelFn = null
+        ?callable $waitFn = null
     )
     {
         $this->waitFn = $waitFn;
-        $this->cancelFn = $cancelFn;
 
         try {
             $executor(
@@ -91,9 +86,9 @@ final class Promise implements PromiseInterface
     /**
      * Attaches callbacks for the resolution and/or rejection of the Promise.
      * 
-     * @param callable|null $onFulfilled
-     * @param callable|null $onRejected
-     * @return PromiseInterface<mixed>
+     * @param callable(T): mixed|null $onFulfilled Callback for fulfilled state
+     * @param callable(Throwable): mixed|null $onRejected Callback for rejected state
+     * @return PromiseInterface<mixed> New promise for chaining
      */
     public function then(?callable $onFulfilled = null, ?callable $onRejected = null): PromiseInterface
     {
@@ -136,7 +131,7 @@ final class Promise implements PromiseInterface
                     $handler();
                 }
             },
-            $this->waitFn
+            $this->waitFn // CRITICAL: Propagate waitFn for chained promises
         );
     }
 
@@ -365,57 +360,6 @@ final class Promise implements PromiseInterface
     {
         return new self(function (callable $resolve, callable $reject) use ($reason): void {
             $reject($reason);
-        });
-    }
-
-    /**
-     * Returns a promise that resolves when all promises are settled.
-     * Never rejects.
-     *
-     * @template TValue
-     * @param iterable<PromiseInterface<TValue>|TValue> $promises
-     * @return PromiseInterface<array<array{status: string, value?: TValue, reason?: Throwable}>>
-     */
-    public static function allSettled(iterable $promises): PromiseInterface
-    {
-        $promisesArray = is_array($promises) ? $promises : iterator_to_array($promises);
-
-        if (empty($promisesArray)) {
-            return self::resolve([]);
-        }
-
-        return new self(function (callable $resolve) use ($promisesArray): void {
-            $results = [];
-            $remaining = count($promisesArray);
-
-            foreach ($promisesArray as $index => $promise) {
-                $promise = $promise instanceof PromiseInterface
-                    ? $promise
-                    : self::resolve($promise);
-
-                $promise->then(
-                    function (mixed $value) use ($index, &$results, &$remaining, $resolve): void {
-                        $results[$index] = [
-                            'status' => self::STATE_FULFILLED,
-                            'value' => $value,
-                        ];
-                        if (--$remaining === 0) {
-                            ksort($results);
-                            $resolve(array_values($results));
-                        }
-                    },
-                    function (Throwable $reason) use ($index, &$results, &$remaining, $resolve): void {
-                        $results[$index] = [
-                            'status' => self::STATE_REJECTED,
-                            'reason' => $reason,
-                        ];
-                        if (--$remaining === 0) {
-                            ksort($results);
-                            $resolve(array_values($results));
-                        }
-                    }
-                );
-            }
         });
     }
 

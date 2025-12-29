@@ -9,8 +9,13 @@ use CurlMultiHandle;
 use InvalidArgumentException;
 use Laminas\Diactoros\Response;
 use Omegaalfa\HttpPromise\Exception\HttpException;
+use Omegaalfa\HttpPromise\Http\ConnectionPool;
+use Omegaalfa\HttpPromise\Http\EventLoop;
 use Omegaalfa\HttpPromise\Http\HttpProcessorTrait;
+use Omegaalfa\HttpPromise\Http\Metrics;
 use Omegaalfa\HttpPromise\Http\RequestOptions;
+use Omegaalfa\HttpPromise\Http\RetryHandler;
+use Omegaalfa\HttpPromise\Http\UrlValidator;
 use Omegaalfa\HttpPromise\Promise\Deferred;
 use Omegaalfa\HttpPromise\Promise\Promise;
 use Omegaalfa\HttpPromise\Promise\PromiseInterface;
@@ -50,53 +55,29 @@ class HttpPromise
         'HEAD', 'OPTIONS', 'TRACE', 'CONNECT',
     ];
 
-    /**
-     * @var CurlMultiHandle
-     */
+    /** @var CurlMultiHandle cURL multi handle for concurrent requests */
     private CurlMultiHandle $multiHandle;
 
-    /** @var array<int, array{handle: CurlHandle, deferred: Deferred<ResponseInterface>, url: string, method: string, attempt: int}> */
-    private array $pendingHandles = [];
+    /** @var ConnectionPool Connection pool for cURL handle reuse */
+    private ConnectionPool $pool;
 
-    /** @var list<array{deferred: Deferred<ResponseInterface>, url: string, method: string, headers: array<string, string|int|float|bool|null>, body: mixed, query: array<string, mixed>|null, attempt: int, enqueuedAt: float, retryAfter?: float}> */
-    private array $queuedHandles = [];
+    /** @var EventLoop Event loop for request processing */
+    private EventLoop $loop;
 
-    /** @var array<string, list<CurlHandle>> */
-    private array $handlePoolByHost = [];
+    /** @var RetryHandler Retry logic handler */
+    private RetryHandler $retryHandler;
 
-    /**
-     * @var int
-     */
-    private int $maxPoolSize = 50;
+    /** @var Metrics Performance metrics tracker */
+    private Metrics $metrics;
 
-    /** @var array<int, callable(array<string, mixed>, callable(array<string, mixed>): PromiseInterface<ResponseInterface>): PromiseInterface<ResponseInterface>> */
+    /** @var UrlValidator URL validation for SSRF protection */
+    private UrlValidator $urlValidator;
+
+    /** @var array<int, callable(array<string, mixed>, callable(array<string, mixed>): PromiseInterface<ResponseInterface>): PromiseInterface<ResponseInterface>> Middleware pipeline */
     private array $middlewares = [];
 
-    /**
-     * @var RequestOptions
-     */
+    /** @var RequestOptions Request configuration options */
     private RequestOptions $options;
-
-    // Concurrency control
-    private int $maxConcurrent = 50;
-
-    // Performance metrics
-    /**
-     * @var int
-     */
-    private int $totalRequests = 0;
-    /**
-     * @var int
-     */
-    private int $successfulRequests = 0;
-    /**
-     * @var int
-     */
-    private int $failedRequests = 0;
-    /**
-     * @var float
-     */
-    private float $startTime = 0.0;
 
     /**
      * Creates a new HttpPromise client.
@@ -104,13 +85,26 @@ class HttpPromise
      * @param ResponseInterface $responsePrototype Prototype response for cloning
      * @param RequestOptions|null $options Request options
      * @param int $maxConcurrent Maximum concurrent requests
+     * @param int $maxPoolSize Maximum pooled connections per host
      */
-    public function __construct(protected ResponseInterface $responsePrototype, ?RequestOptions $options = null, int $maxConcurrent = 50)
+    public function __construct(
+        protected ResponseInterface $responsePrototype,
+        ?RequestOptions             $options = null,
+        int                         $maxConcurrent = 50,
+        int                         $maxPoolSize = 50
+    )
     {
         $this->multiHandle = curl_multi_init();
         $this->options = $options ?? RequestOptions::create();
-        $this->maxConcurrent = max(1, $maxConcurrent);
-        $this->startTime = microtime(true);
+        $this->pool = new ConnectionPool($maxPoolSize);
+        $this->loop = new EventLoop($this->multiHandle, $maxConcurrent);
+        $this->retryHandler = new RetryHandler(
+            $this->options->retryAttempts,
+            $this->options->retryDelay,
+            $this->options->retryStatusCodes
+        );
+        $this->metrics = new Metrics();
+        $this->urlValidator = new UrlValidator();
 
         $this->configureMultiHandle();
     }
@@ -118,17 +112,23 @@ class HttpPromise
     /**
      * Creates a new HttpPromise client (factory method).
      *
-     * @param ?ResponseInterface $response
-     * @param RequestOptions|null $options
-     * @param int $maxConcurrent
-     * @return self
+     * @param ResponseInterface|null $response Response prototype
+     * @param RequestOptions|null $options Request options
+     * @param int $maxConcurrent Maximum concurrent requests
+     * @param int $maxPoolSize Maximum pooled connections per host
+     * @return self New HttpPromise instance
      */
-    public static function create(?ResponseInterface $response = null, ?RequestOptions $options = null, int $maxConcurrent = 50): self
+    public static function create(
+        ?ResponseInterface $response = null,
+        ?RequestOptions    $options = null,
+        int                $maxConcurrent = 50,
+        int                $maxPoolSize = 50
+    ): self
     {
         if (!$response instanceof ResponseInterface) {
             $response = new Response();
         }
-        return new self($response, $options, $maxConcurrent);
+        return new self($response, $options, $maxConcurrent, $maxPoolSize);
     }
 
     // =========================================================================
@@ -136,6 +136,8 @@ class HttpPromise
     // =========================================================================
 
     /**
+     * Configures cURL multi handle options.
+     *
      * @return void
      */
     private function configureMultiHandle(): void
@@ -151,10 +153,10 @@ class HttpPromise
 
         // Set connection limits
         if (defined('CURLMOPT_MAX_TOTAL_CONNECTIONS')) {
-            @curl_multi_setopt($this->multiHandle, CURLMOPT_MAX_TOTAL_CONNECTIONS, max(1, $this->maxConcurrent));
+            @curl_multi_setopt($this->multiHandle, CURLMOPT_MAX_TOTAL_CONNECTIONS, $this->loop->getMaxConcurrent());
         }
         if (defined('CURLMOPT_MAX_HOST_CONNECTIONS')) {
-            @curl_multi_setopt($this->multiHandle, CURLMOPT_MAX_HOST_CONNECTIONS, max(1, $this->maxConcurrent));
+            @curl_multi_setopt($this->multiHandle, CURLMOPT_MAX_HOST_CONNECTIONS, $this->loop->getMaxConcurrent());
         }
 
         // Enable chunked transfer if available (faster for large responses)
@@ -245,35 +247,13 @@ class HttpPromise
     /**
      * Sets maximum number of idle CurlHandle instances kept in the pool.
      *
-     * @param int $maxPoolSize
-     * @return self
+     * @param int $maxPoolSize Maximum pool size per host
+     * @return self New instance with updated pool size
      */
     public function withMaxPoolSize(int $maxPoolSize): self
     {
         $clone = clone $this;
-        $clone->maxPoolSize = max(0, $maxPoolSize);
-        if ($clone->maxPoolSize === 0) {
-            // Disable pooling: close any currently pooled handles
-            foreach ($clone->handlePoolByHost as $handles) {
-                foreach ($handles as $handle) {
-                    if ($handle instanceof CurlHandle) {
-                        curl_close($handle);
-                    }
-                }
-            }
-            $clone->handlePoolByHost = [];
-        } else {
-            // Trim pool por host
-            foreach ($clone->handlePoolByHost as $host => $handles) {
-                while (count($handles) > $clone->maxPoolSize) {
-                    $handle = array_pop($handles);
-                    if ($handle instanceof CurlHandle) {
-                        curl_close($handle);
-                    }
-                }
-                $clone->handlePoolByHost[$host] = $handles;
-            }
-        }
+        $clone->pool->setMaxPoolSize($maxPoolSize);
         return $clone;
     }
 
@@ -309,13 +289,13 @@ class HttpPromise
     /**
      * Returns a new instance with maximum concurrent requests limit.
      *
-     * @param int $maxConcurrent
-     * @return self
+     * @param int $maxConcurrent Maximum concurrent requests
+     * @return self New instance with updated concurrency limit
      */
     public function withMaxConcurrent(int $maxConcurrent): self
     {
         $clone = clone $this;
-        $clone->maxConcurrent = max(1, $maxConcurrent);
+        $clone->loop->setMaxConcurrent($maxConcurrent);
         $clone->configureMultiHandle();
         return $clone;
     }
@@ -477,8 +457,8 @@ class HttpPromise
     /**
      * Internal method to send HTTP request.
      *
-     * @param array<string, mixed> $request
-     * @return PromiseInterface<ResponseInterface>
+     * @param array<string, mixed> $request Request data
+     * @return PromiseInterface<ResponseInterface> Promise resolving to response
      */
     private function sendRequestInternal(array $request): PromiseInterface
     {
@@ -493,11 +473,11 @@ class HttpPromise
         $deferred = new Deferred(fn() => $this->tick());
 
         // Increment metrics
-        $this->totalRequests++;
+        $this->metrics->incrementTotal();
 
         // Enqueue if no slots
-        if (count($this->pendingHandles) >= $this->maxConcurrent) {
-            $this->queuedHandles[] = [
+        if ($this->loop->pendingCount() >= $this->loop->getMaxConcurrent()) {
+            $this->loop->addQueued([
                 'deferred' => $deferred,
                 'url' => $request['url'],
                 'method' => $request['method'],
@@ -506,24 +486,24 @@ class HttpPromise
                 'query' => $request['query'],
                 'attempt' => $request['attempt'],
                 'enqueuedAt' => microtime(true),
-            ];
+            ]);
 
             return $deferred->promise();
         }
 
         // Validar URL antes de criar handle (SSRF protection)
-        $this->validateUrl($fullUrl);
+        $this->urlValidator->validate($fullUrl);
 
         $handle = $this->createHandle($request['method'], $fullUrl, $mergedHeaders, $request['body']);
         curl_multi_add_handle($this->multiHandle, $handle);
 
-        $this->pendingHandles[spl_object_id($handle)] = [
+        $this->loop->addPending([
             'handle' => $handle,
             'deferred' => $deferred,
             'url' => $request['url'],
             'method' => $request['method'],
             'attempt' => $request['attempt'],
-        ];
+        ]);
 
         return $deferred->promise();
     }
@@ -535,18 +515,24 @@ class HttpPromise
      */
     public function tick(): void
     {
-        if (empty($this->pendingHandles) && empty($this->queuedHandles)) {
+        if (!$this->loop->hasPending()) {
             return;
         }
 
         $this->processQueuedRequests();
-
-        do {
-            $status = curl_multi_exec($this->multiHandle, $stillRunning);
-        } while ($status === CURLM_CALL_MULTI_PERFORM);
-
+        $this->loop->tick();
         $this->processCompletedHandles();
         $this->processQueuedRequests();
+    }
+
+    /**
+     * Checks if there are pending requests.
+     *
+     * @return bool True if there are pending or queued requests
+     */
+    public function hasPending(): bool
+    {
+        return $this->loop->hasPending();
     }
 
     /**
@@ -559,7 +545,7 @@ class HttpPromise
         $now = microtime(true);
 
         // Remover requests com timeout expirado na fila
-        foreach ($this->queuedHandles as $i => $request) {
+        foreach ($this->loop->getQueued() as $i => $request) {
             $queueTime = $now - $request['enqueuedAt'];
             if ($queueTime > $this->options->timeout) {
                 $request['deferred']->reject(
@@ -569,21 +555,26 @@ class HttpPromise
                         $request['method']
                     )
                 );
-                unset($this->queuedHandles[$i]);
-                $this->failedRequests++;
+                $this->loop->removeQueued($i);
+                $this->metrics->incrementFailed();
             }
         }
-        $this->queuedHandles = array_values($this->queuedHandles);
+        $this->loop->reindexQueued();
 
-        while (!empty($this->queuedHandles) && count($this->pendingHandles) < $this->maxConcurrent) {
-            $request = $this->queuedHandles[0];
+        while ($this->loop->canProcessQueued()) {
+            $queued = $this->loop->getQueued();
+            if (empty($queued)) {
+                break;
+            }
+
+            $request = $queued[0];
 
             // Verificar se deve aguardar retry delay (non-blocking)
             if (isset($request['retryAfter']) && $now < $request['retryAfter']) {
                 break; // Aguardar, mas não bloquear
             }
 
-            array_shift($this->queuedHandles);
+            $this->loop->shiftQueued();
 
             if ($request === null) {
                 return;
@@ -594,64 +585,26 @@ class HttpPromise
 
             try {
                 // Validar URL (SSRF protection)
-                $this->validateUrl($fullUrl);
+                $this->urlValidator->validate($fullUrl);
 
                 $handle = $this->createHandle($request['method'], $fullUrl, $request['headers'], $request['body']);
 
                 curl_multi_add_handle($this->multiHandle, $handle);
 
-                $this->pendingHandles[spl_object_id($handle)] = [
+                $this->loop->addPending([
                     'handle' => $handle,
                     'deferred' => $request['deferred'],
                     'url' => $request['url'],
                     'method' => $request['method'],
                     'attempt' => $request['attempt'],
-                ];
+                ]);
             } catch (InvalidArgumentException $e) {
                 // URL inválida - rejeitar promise
                 $request['deferred']->reject(
                     new HttpException($e->getMessage(), $request['url'], $request['method'])
                 );
-                $this->failedRequests++;
+                $this->metrics->incrementFailed();
             }
-        }
-    }
-
-    /**
-     * Validates URL to prevent SSRF attacks.
-     *
-     * @param string $url
-     * @throws InvalidArgumentException
-     */
-    private function validateUrl(string $url): void
-    {
-        $parsed = parse_url($url);
-
-        if ($parsed === false || !isset($parsed['scheme'], $parsed['host'])) {
-            throw new InvalidArgumentException('Invalid URL format');
-        }
-
-        // Whitelist de protocolos permitidos
-        $allowedSchemes = ['http', 'https'];
-        if (!in_array(strtolower($parsed['scheme']), $allowedSchemes, true)) {
-            throw new InvalidArgumentException("Protocol '{$parsed['scheme']}' not allowed. Only HTTP/HTTPS are permitted.");
-        }
-
-        // Validar que não é IP privado ou reservado
-        $host = $parsed['host'];
-
-        // Resolver DNS
-        $ip = @gethostbyname($host);
-
-        // Se não conseguiu resolver ou é o próprio host, pode ser IP literal
-        // Verificar se é IP válido
-        if (($ip === $host) && filter_var($host, FILTER_VALIDATE_IP)) {
-            $ip = $host;
-        }
-
-        // Validar que não é IP privado/reservado/loopback
-        if (filter_var($ip, FILTER_VALIDATE_IP) && !filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_NO_PRIV_RANGE | FILTER_FLAG_NO_RES_RANGE)) {
-            throw new InvalidArgumentException("Access to private/reserved IP addresses is forbidden: {$ip}");
         }
     }
 
@@ -662,6 +615,8 @@ class HttpPromise
      * @param string $url Request URL
      * @param array<string, string|int|float|bool|null> $headers Request headers
      * @param mixed $body Request body
+     * @return CurlHandle Configured cURL handle
+     * @throws RuntimeException If URL is empty
      */
     private function createHandle(string $method, string $url, array $headers, mixed $body): CurlHandle
     {
@@ -669,7 +624,7 @@ class HttpPromise
             throw new RuntimeException('URL cannot be empty');
         }
 
-        $handle = $this->acquireHandle($url);
+        $handle = $this->pool->acquire($url);
 
         $userAgent = $this->options->getUserAgent();
 
@@ -734,12 +689,17 @@ class HttpPromise
         // Headers (always set to avoid stale headers when reusing handles)
         curl_setopt($handle, CURLOPT_HTTPHEADER, $this->formatHeaders($headers));
 
-        // Body
+        // Body (always set to avoid stale data when reusing handles)
         if ($body !== null && !in_array($method, ['GET', 'HEAD'], true)) {
             $processedBody = $this->formatParams($body, $headers);
             if ($processedBody !== null) {
                 curl_setopt($handle, CURLOPT_POSTFIELDS, $processedBody);
+            } else {
+                curl_setopt($handle, CURLOPT_POSTFIELDS, '');
             }
+        } else {
+            // Clear any previous POSTFIELDS from pooled handle
+            curl_setopt($handle, CURLOPT_POSTFIELDS, '');
         }
 
         // Proxy
@@ -751,50 +711,9 @@ class HttpPromise
     }
 
     /**
-     * Acquires a cURL handle from pool (by host) or creates new one.
-     *
-     * @param string $url
-     * @return CurlHandle
-     */
-    private function acquireHandle(string $url): CurlHandle
-    {
-        $host = parse_url($url, PHP_URL_HOST) ?? 'default';
-
-        if (isset($this->handlePoolByHost[$host]) && !empty($this->handlePoolByHost[$host])) {
-            $handle = array_pop($this->handlePoolByHost[$host]);
-            if ($handle instanceof CurlHandle) {
-                // Reset seguro: limpar headers e auth explicitamente
-                $this->resetHandle($handle);
-                return $handle;
-            }
-        }
-
-        $newHandle = curl_init();
-        if (!$newHandle instanceof CurlHandle) {
-            throw new RuntimeException('Failed to create cURL handle');
-        }
-        return $newHandle;
-    }
-
-    /**
-     * Resets a cURL handle safely, clearing sensitive data.
-     *
-     * @param CurlHandle $handle
-     * @return void
-     */
-    private function resetHandle(CurlHandle $handle): void
-    {
-        // Limpar headers explicitamente antes do reset
-        curl_setopt($handle, CURLOPT_HTTPHEADER, []);
-
-        if (function_exists('curl_reset')) {
-            // curl_reset limpa todas as opções incluindo USERPWD, COOKIE, POSTFIELDS
-            curl_reset($handle);
-        }
-    }
-
-    /**
      * Processes completed cURL handles.
+     *
+     * @return void
      */
     private function processCompletedHandles(): void
     {
@@ -810,12 +729,12 @@ class HttpPromise
             }
 
             $handleId = spl_object_id($handle);
+            $data = $this->loop->removePending($handleId);
 
-            if (!isset($this->pendingHandles[$handleId])) {
+            if ($data === null) {
                 continue;
             }
 
-            $data = $this->pendingHandles[$handleId];
             $deferred = $data['deferred'];
 
             try {
@@ -823,30 +742,29 @@ class HttpPromise
                     $response = $this->createResponse($handle);
 
                     // Check if we should retry based on status code
-                    if ($this->shouldRetry($response, $data)) {
+                    if ($this->retryHandler->shouldRetry($response, $data['method'], $data['attempt'])) {
                         $this->scheduleRetry($data);
                     } else {
                         $deferred->resolve($response);
-                        $this->successfulRequests++;
+                        $this->metrics->incrementSuccessful();
                     }
                 } else {
                     $error = curl_error($handle);
                     $exception = HttpException::fromCurlError($error, $data['url'], $data['method']);
 
                     // Check if we should retry on network error
-                    if ($data['attempt'] <= $this->options->retryAttempts) {
+                    if ($this->retryHandler->shouldRetryOnError($data['attempt'])) {
                         $this->scheduleRetry($data);
                     } else {
                         $deferred->reject($exception);
-                        $this->failedRequests++;
+                        $this->metrics->incrementFailed();
                     }
                 }
             } finally {
                 curl_multi_remove_handle($this->multiHandle, $handle);
                 // Construir URL completa para release correto
                 $fullUrl = $this->options->buildFullUrl($data['url']);
-                $this->releaseHandle($handle, $fullUrl);
-                unset($this->pendingHandles[$handleId]);
+                $this->pool->release($handle, $fullUrl);
             }
         }
     }
@@ -871,37 +789,15 @@ class HttpPromise
     }
 
     /**
-     * Checks if the request should be retried.
-     * Only retries idempotent methods to prevent duplicate operations.
-     *
-     * @param ResponseInterface $response
-     * @param array{handle: CurlHandle, deferred: Deferred<ResponseInterface>, url: string, method: string, attempt: int} $data
-     * @return bool
-     */
-    private function shouldRetry(ResponseInterface $response, array $data): bool
-    {
-        if ($data['attempt'] > $this->options->retryAttempts) {
-            return false;
-        }
-
-        // Apenas métodos idempotentes podem ser retentados com segurança
-        $idempotentMethods = ['GET', 'HEAD', 'OPTIONS', 'PUT', 'DELETE'];
-        if (!in_array($data['method'], $idempotentMethods, true)) {
-            return false; // POST/PATCH nunca retry (risco de duplicação)
-        }
-
-        return in_array($response->getStatusCode(), $this->options->retryStatusCodes, true);
-    }
-
-    /**
      * Schedules a retry for a failed request (non-blocking).
      *
-     * @param array{handle: CurlHandle, deferred: Deferred<ResponseInterface>, url: string, method: string, attempt: int} $data
+     * @param array{handle: CurlHandle, deferred: Deferred<ResponseInterface>, url: string, method: string, attempt: int} $data Request data
+     * @return void
      */
     private function scheduleRetry(array $data): void
     {
         // Non-blocking retry: adicionar à fila com delay
-        $this->queuedHandles[] = [
+        $this->loop->addQueued([
             'deferred' => $data['deferred'], // Reutilizar o mesmo Deferred
             'url' => $data['url'],
             'method' => $data['method'],
@@ -910,31 +806,18 @@ class HttpPromise
             'query' => null,
             'attempt' => $data['attempt'] + 1,
             'enqueuedAt' => microtime(true),
-            'retryAfter' => microtime(true) + $this->options->retryDelay,
-        ];
+            'retryAfter' => $this->retryHandler->getRetryAfter($data['attempt']),
+        ]);
     }
 
     /**
-     * Releases a cURL handle back to the pool (by host).
+     * Returns the number of pending requests.
      *
-     * @param CurlHandle $handle
-     * @param string $url
-     * @return void
+     * @return int Pending request count
      */
-    private function releaseHandle(CurlHandle $handle, string $url): void
+    public function pendingCount(): int
     {
-        $host = parse_url($url, PHP_URL_HOST) ?? 'default';
-
-        if (!isset($this->handlePoolByHost[$host])) {
-            $this->handlePoolByHost[$host] = [];
-        }
-
-        if (count($this->handlePoolByHost[$host]) >= $this->maxPoolSize) {
-            curl_close($handle);
-            return;
-        }
-
-        $this->handlePoolByHost[$host][] = $handle;
+        return $this->loop->pendingCount();
     }
 
     /**
@@ -1045,7 +928,6 @@ class HttpPromise
      */
     public function concurrent(array $requests): PromiseInterface
     {
-
         $promises = array_map(function ($request) {
             return $this->request(
                 method: $request['method'],
@@ -1055,8 +937,15 @@ class HttpPromise
             );
         }, $requests);
 
-        // Use Promise::all with a waitFn that ticks this client
-        return Promise::all($promises);
+        // Create a promise that wraps Promise::all with a waitFn that ticks this client
+        $allPromise = Promise::all($promises);
+
+        return new Promise(
+            function (callable $resolve, callable $reject) use ($allPromise): void {
+                $allPromise->then($resolve, $reject);
+            },
+            fn() => $this->tick()
+        );
     }
 
     /**
@@ -1077,14 +966,22 @@ class HttpPromise
             );
         }, $requests);
 
-        // Use Promise::race
-        return Promise::race($promises);
+        // Create a promise that wraps Promise::race with a waitFn that ticks this client
+        $racePromise = Promise::race($promises);
+
+        return new Promise(
+            function (callable $resolve, callable $reject) use ($racePromise): void {
+                $racePromise->then($resolve, $reject);
+            },
+            fn() => $this->tick()
+        );
     }
 
     /**
      * Waits for all pending requests to complete.
      *
      * @param float|null $timeout Maximum time to wait in seconds
+     * @return void
      */
     public function wait(?float $timeout = null): void
     {
@@ -1114,54 +1011,23 @@ class HttpPromise
     }
 
     /**
-     * Checks if there are pending requests.
-     *
-     * @return bool
-     */
-    public function hasPending(): bool
-    {
-        return !empty($this->pendingHandles) || !empty($this->queuedHandles);
-    }
-
-    /**
      * Returns performance metrics.
      *
-     * @return array<string, int|float>
+     * @return array{total_requests: int, successful_requests: int, failed_requests: int, pending_requests: int, queued_requests: int, uptime_seconds: float, requests_per_second: float, success_rate: float}
      */
     public function getMetrics(): array
     {
-        $uptime = microtime(true) - $this->startTime;
-
-        return [
-            'total_requests' => $this->totalRequests,
-            'successful_requests' => $this->successfulRequests,
-            'failed_requests' => $this->failedRequests,
-            'pending_requests' => $this->pendingCount(),
-            'queued_requests' => $this->queuedCount(),
-            'uptime_seconds' => $uptime,
-            'requests_per_second' => $uptime > 0 ? $this->totalRequests / $uptime : 0,
-            'success_rate' => $this->totalRequests > 0 ? ($this->successfulRequests / $this->totalRequests) * 100 : 0,
-        ];
-    }
-
-    /**
-     * Returns the number of pending requests.
-     *
-     * @return int
-     */
-    public function pendingCount(): int
-    {
-        return count($this->pendingHandles);
+        return $this->metrics->toArray($this->loop->pendingCount(), $this->loop->queuedCount());
     }
 
     /**
      * Returns the number of queued requests.
      *
-     * @return int
+     * @return int Queued request count
      */
     public function queuedCount(): int
     {
-        return count($this->queuedHandles);
+        return $this->loop->queuedCount();
     }
 
     /**
@@ -1176,23 +1042,19 @@ class HttpPromise
 
     /**
      * Cleanup resources.
+     *
+     * @return void
      */
     public function __destruct()
     {
         // Cancel any pending handles
-        foreach ($this->pendingHandles as $data) {
+        foreach ($this->loop->getPending() as $data) {
             curl_multi_remove_handle($this->multiHandle, $data['handle']);
             curl_close($data['handle']);
         }
 
         // Close pooled handles
-        foreach ($this->handlePoolByHost as $handles) {
-            foreach ($handles as $handle) {
-                if ($handle instanceof CurlHandle) {
-                    curl_close($handle);
-                }
-            }
-        }
+        $this->pool->closeAll();
 
         curl_multi_close($this->multiHandle);
     }

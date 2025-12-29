@@ -174,6 +174,7 @@ trait HttpProcessorTrait
 
     /**
      * Merges default headers with custom headers.
+     * Custom headers override defaults (case-insensitive comparison).
      *
      * @param array<string, string|int|float|bool|null> $custom Custom headers
      * @param array<string, string|int|float|bool|null> $defaults Default headers
@@ -183,14 +184,18 @@ trait HttpProcessorTrait
     {
         // Normalize header names to lowercase for comparison
         $normalized = [];
+        
+        // Add defaults first
         foreach ($defaults as $name => $value) {
             $normalized[strtolower($name)] = [$name, $value];
         }
 
+        // Custom headers override defaults (case-insensitive)
         foreach ($custom as $name => $value) {
             $normalized[strtolower($name)] = [$name, $value];
         }
 
+        // Build result with original header names from the winning values
         $result = [];
         foreach ($normalized as [$name, $value]) {
             $result[$name] = $value;

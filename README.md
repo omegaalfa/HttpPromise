@@ -5,12 +5,10 @@
 [![PHP Version](https://img.shields.io/badge/PHP-8.4%2B-777BB4?style=flat-square&logo=php)](https://php.net)
 [![License](https://img.shields.io/badge/License-MIT-green?style=flat-square)](LICENSE)
 [![PHPStan Level](https://img.shields.io/badge/PHPStan-Level%206-brightgreen?style=flat-square)](https://phpstan.org)
-[![Tests](https://img.shields.io/badge/Tests-134%20passed-success?style=flat-square)]()
-[![Coverage](https://img.shields.io/badge/Coverage-100%25-brightgreen?style=flat-square)]()
 
 **A modern, production-ready async HTTP client for PHP with Promise/A+ support, connection pooling, and HTTP/2 multiplexing**
 
-[Features](#-features) • [Installation](#-installation) • [Quick Start](#-quick-start) • [Documentation](#-documentation) • [Security](#-security) • [Performance](#-performance)
+[Features](#-features) • [Installation](#-installation) • [Quick Start](#-quick-start) • [API Reference](#-complete-api-reference) • [Security](#-security) • [Performance](#-performance)
 
 </div>
 
@@ -21,7 +19,7 @@
 - ⚡ **246% faster** than Guzzle on concurrent requests
 - 🔒 **Security-first**: SSRF protection, header sanitization, credential isolation
 - 🚀 **Zero dependencies** (only ext-curl + PSR-7)
-- 🎭 **Production-tested** with comprehensive security audit
+- 🎭 **Production-tested** with comprehensive refactored architecture
 - 📦 **Modern PHP 8.4+** with strict types and generics
 - 🔄 **True async** with Promise/A+ implementation
 
@@ -32,7 +30,7 @@
 - ⚡ **Promise/A+** implementation (`then`, `catch`, `finally`)
 - 🔗 **Fluent API** for elegant configuration chaining
 - 🔄 **Concurrent requests** with `concurrent()` and `race()`
-- 🔁 **Smart retry** - idempotent methods only, non-blocking delays
+- 🔁 **Smart retry** - idempotent methods only, exponential backoff
 - 🏊 **Connection pooling** - isolated by host with secure handle reuse
 - 🎭 **Middleware pipeline** for request/response interception
 - ⚡ **HTTP/2 multiplexing** with libcurl 7.65.0+ safety checks
@@ -44,8 +42,16 @@
 - 🛡️ **Header injection prevention** - CRLF sanitization (RFC 7230)
 - 🔐 **Credential isolation** - connection pool per host
 - ⏱️ **Queue timeouts** - prevents starvation attacks
-- 🚫 **Safe retry** - only idempotent methods (GET, PUT, DELETE)
+- 🚫 **Safe retry** - only idempotent methods (GET, PUT, DELETE, HEAD, OPTIONS)
 - ✅ **Type safety** - strict types, PHPStan level 6
+
+### New Architecture (Post-Refactoring)
+- 🏗️ **Separated concerns** - 6 focused classes instead of monolithic structure
+- 🔧 **ConnectionPool** - Dedicated connection management
+- 🔄 **EventLoop** - Isolated event processing
+- 🔁 **RetryHandler** - Configurable retry logic with exponential backoff
+- 📊 **Metrics** - Dedicated performance tracking
+- 🛡️ **UrlValidator** - Standalone SSRF protection
 
 ## 📦 Installation
 
@@ -78,7 +84,7 @@ php -r "echo curl_version()['version'];"
 
 ```php
 use Omegaalfa\HttpPromise\HttpPromise;
-use Nyholm\Psr7\Response;
+use Laminas\Diactoros\Response;
 
 // Create client with fluent configuration
 $http = HttpPromise::create(new Response())
@@ -771,27 +777,1273 @@ src/
 
 ---
 
-## 📖 API Reference
+## 📖 Complete API Reference
 
-### HttpPromise Methods
+All 38 public methods documented with explanations and examples.
 
-#### Factory & Configuration
+---
 
-| Method                                             | Description | Returns |
-|----------------------------------------------------|-------------|---------|
-| `create(?ResponseInterface, ?RequestOptions, int)` | Create new instance | `HttpPromise` |
-| `withBaseUrl(string)`                              | Set base URL | `self` |
-| `withTimeout(float)`                               | Set connection timeout (seconds) | `self` |
-| `withUserAgent(string)`                            | Set User-Agent header | `self` |
-| `withHeaders(array)`                               | Add custom headers | `self` |
-| `withProxy(string)`                                | Set proxy URL | `self` |
-| `withoutSSLVerification()`                         | ⚠️ Disable SSL verification | `self` |
+### 🏭 Factory & Initialization
 
-#### Authentication
+#### `create(?ResponseInterface $response = null, ?RequestOptions $options = null, int $maxRetryAttempts = 3): static`
 
-| Method | Description | Returns |
-|--------|-------------|---------|
-| `withBearerToken(string)` | Set Bearer token | `self` |
+Creates a new HttpPromise instance with optional pre-configuration.
+
+**Parameters:**
+- `$response` (optional): PSR-7 response prototype (e.g., `new Response()`)
+- `$options` (optional): Pre-configured RequestOptions object
+- `$maxRetryAttempts` (default: 3): Maximum retry attempts for failed requests
+
+**Returns:** New `HttpPromise` instance
+
+**Example:**
+```php
+use Omegaalfa\HttpPromise\HttpPromise;
+use Laminas\Diactoros\Response;
+
+// Basic creation
+$http = HttpPromise::create();
+
+// With response prototype
+$http = HttpPromise::create(new Response());
+
+// With pre-configured options
+$options = RequestOptions::create()
+    ->withBaseUrl('https://api.example.com')
+    ->withTimeout(30.0);
+$http = HttpPromise::create(new Response(), $options);
+
+// With custom retry limit
+$http = HttpPromise::create(null, null, 5); // Max 5 retries
+```
+
+---
+
+#### `__construct(?ResponseInterface $response = null, ?RequestOptions $options = null, int $maxRetryAttempts = 3)`
+
+Constructor (use `create()` factory method instead for cleaner syntax).
+
+**Example:**
+```php
+$http = new HttpPromise(new Response(), RequestOptions::create(), 3);
+```
+
+---
+
+### ⚙️ Configuration Methods
+
+All configuration methods return a **new immutable instance**.
+
+---
+
+#### `withBaseUrl(string $baseUrl): self`
+
+Sets the base URL prepended to all relative URLs.
+
+**Parameters:**
+- `$baseUrl`: Base URL (e.g., `https://api.example.com`)
+
+**Returns:** New instance with updated base URL
+
+**Example:**
+```php
+$http = HttpPromise::create()
+    ->withBaseUrl('https://api.github.com');
+
+// Now all requests use the base URL
+$http->get('/users/octocat')->wait();      // https://api.github.com/users/octocat
+$http->get('/repos/php/php-src')->wait();  // https://api.github.com/repos/php/php-src
+```
+
+---
+
+#### `withOptions(RequestOptions $options): self`
+
+Replaces all options with a pre-configured RequestOptions object.
+
+**Parameters:**
+- `$options`: Complete RequestOptions configuration
+
+**Returns:** New instance with replaced options
+
+**Example:**
+```php
+$options = RequestOptions::create()
+    ->withBaseUrl('https://api.example.com')
+    ->withTimeout(60.0)
+    ->withRetry(5, 2.0)
+    ->asJson();
+
+$http = HttpPromise::create()->withOptions($options);
+
+// All options are now active
+$http->get('/data')->wait();
+```
+
+---
+
+#### `withTimeout(float $timeout): self`
+
+Sets connection and read timeout in seconds.
+
+**Parameters:**
+- `$timeout`: Timeout in seconds (e.g., `30.0`)
+
+**Returns:** New instance with updated timeout
+
+**Example:**
+```php
+// Aggressive timeout for fast APIs
+$http = HttpPromise::create()
+    ->withTimeout(5.0);
+
+// Longer timeout for slow operations
+$http = $http->withTimeout(120.0);
+
+// Catch timeouts
+$http->get('/slow-endpoint')
+    ->catch(fn(TimeoutException $e) => ['error' => 'Timeout!'])
+    ->wait();
+```
+
+---
+
+#### `withRetry(int $attempts, float $delay, array $statusCodes = [429, 502, 503, 504]): self`
+
+Configures automatic retry with exponential backoff for idempotent methods only (GET, PUT, DELETE, HEAD, OPTIONS).
+
+**Parameters:**
+- `$attempts`: Maximum retry attempts
+- `$delay`: Initial delay in seconds (doubles each retry)
+- `$statusCodes`: HTTP status codes that trigger retries
+
+**Returns:** New instance with retry configuration
+
+**Example:**
+```php
+// Retry up to 3 times with 1s initial delay
+$http = HttpPromise::create()
+    ->withRetry(3, 1.0);
+
+// Custom status codes
+$http = $http->withRetry(5, 2.0, [408, 429, 500, 502, 503, 504]);
+
+// GET request retries on failure
+$http->get('/unreliable-api')->wait();  // Retries automatically
+
+// POST never retries (non-idempotent)
+$http->post('/payment', ['amount' => 100])->wait();  // No retry
+```
+
+**Retry Schedule:**
+- Attempt 1: Immediate
+- Attempt 2: After 1s delay
+- Attempt 3: After 2s delay (exponential backoff)
+- Attempt 4: After 4s delay
+
+---
+
+#### `withHeaders(array $headers): self`
+
+Adds custom headers to all requests. Merges with existing headers.
+
+**Parameters:**
+- `$headers`: Associative array of headers
+
+**Returns:** New instance with merged headers
+
+**Example:**
+```php
+$http = HttpPromise::create()
+    ->withHeaders([
+        'Accept' => 'application/json',
+        'X-API-Version' => '2.0',
+        'X-Request-ID' => uniqid(),
+    ]);
+
+// Add more headers later
+$http = $http->withHeaders([
+    'X-Tenant-ID' => 'tenant-123',
+]);
+
+// All headers are sent with every request
+$http->get('/data')->wait();
+```
+
+---
+
+#### `withProxy(string $proxy): self`
+
+Configures HTTP/SOCKS proxy for all requests.
+
+**Parameters:**
+- `$proxy`: Proxy URL (e.g., `http://proxy.example.com:8080`)
+
+**Returns:** New instance with proxy configuration
+
+**Example:**
+```php
+// HTTP proxy
+$http = HttpPromise::create()
+    ->withProxy('http://proxy.company.com:8080');
+
+// SOCKS5 proxy
+$http = $http->withProxy('socks5://127.0.0.1:1080');
+
+// Authenticated proxy
+$http = $http->withProxy('http://user:pass@proxy.company.com:3128');
+```
+
+**⚠️ Security:** Only use whitelisted proxy URLs in production.
+
+---
+
+#### `withoutSSLVerification(): self`
+
+**⚠️ WARNING:** Disables SSL certificate verification (vulnerable to MITM attacks).
+
+**Returns:** New instance with SSL verification disabled
+
+**Example:**
+```php
+// ❌ NEVER in production
+// ✅ ONLY for local development/testing
+if (getenv('APP_ENV') === 'development') {
+    $http = HttpPromise::create()->withoutSSLVerification();
+}
+
+// Use for self-signed certificates in staging
+$http->get('https://staging.local')->wait();
+```
+
+---
+
+#### `withUserAgent(string $userAgent): self`
+
+Sets custom User-Agent header.
+
+**Parameters:**
+- `$userAgent`: User-Agent string
+
+**Returns:** New instance with custom User-Agent
+
+**Example:**
+```php
+$http = HttpPromise::create()
+    ->withUserAgent('MyApp/1.0 (https://example.com)');
+
+// Different user agents for different contexts
+$mobileHttp = $http->withUserAgent('MyApp-Mobile/2.0');
+$botHttp = $http->withUserAgent('MyBot/1.0 (+https://example.com/bot)');
+```
+
+---
+
+### 🔐 Authentication Methods
+
+---
+
+#### `withBearerToken(string $token): self`
+
+Adds Bearer token authentication (OAuth 2.0, JWT).
+
+**Parameters:**
+- `$token`: Bearer token string
+
+**Returns:** New instance with Authorization header
+
+**Example:**
+```php
+// OAuth 2.0 / JWT
+$http = HttpPromise::create()
+    ->withBearerToken('eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...');
+
+$http->get('/protected-resource')->wait();
+
+// Token rotation
+$newToken = $authService->refreshToken();
+$http = $http->withBearerToken($newToken);
+```
+
+---
+
+#### `withBasicAuth(string $username, string $password): self`
+
+Adds HTTP Basic Authentication.
+
+**Parameters:**
+- `$username`: Username
+- `$password`: Password
+
+**Returns:** New instance with Authorization header
+
+**Example:**
+```php
+$http = HttpPromise::create()
+    ->withBasicAuth('admin', 'secret123');
+
+$http->get('/admin/dashboard')->wait();
+
+// For APIs using Basic Auth
+$http = HttpPromise::create()
+    ->withBasicAuth('api-key-id', 'api-secret-key');
+```
+
+---
+
+### 🎨 Content Type Methods
+
+---
+
+#### `asJson(): self`
+
+Sets content type to `application/json` and auto-encodes request bodies.
+
+**Returns:** New instance with JSON content type
+
+**Example:**
+```php
+$http = HttpPromise::create()->asJson();
+
+// Body is automatically JSON-encoded
+$http->post('/users', [
+    'name' => 'John Doe',
+    'email' => 'john@example.com',
+    'roles' => ['admin', 'editor'],
+])->wait();
+
+// Equivalent to:
+// Content-Type: application/json
+// Body: {"name":"John Doe","email":"john@example.com","roles":["admin","editor"]}
+```
+
+---
+
+#### `asForm(): self`
+
+Sets content type to `application/x-www-form-urlencoded`.
+
+**Returns:** New instance with form content type
+
+**Example:**
+```php
+$http = HttpPromise::create()->asForm();
+
+// Body is URL-encoded
+$http->post('/login', [
+    'username' => 'john@example.com',
+    'password' => 'secret123',
+])->wait();
+
+// Equivalent to:
+// Content-Type: application/x-www-form-urlencoded
+// Body: username=john%40example.com&password=secret123
+```
+
+---
+
+### ⚡ Performance & Concurrency
+
+---
+
+#### `withHttp2(bool $enable = true): self`
+
+Enables HTTP/2 multiplexing (requires libcurl 7.65.0+).
+
+**Parameters:**
+- `$enable` (default: true): Enable or disable HTTP/2
+
+**Returns:** New instance with HTTP/2 configuration
+
+**Example:**
+```php
+$http = HttpPromise::create()
+    ->withHttp2(true)
+    ->withBaseUrl('https://api.example.com');
+
+// All requests to same host use SINGLE TCP connection
+for ($i = 0; $i < 100; $i++) {
+    $http->get("/items/$i");
+}
+$http->wait();  // 100 requests over 1 connection!
+
+// Benefits:
+// - Lower latency (no connection overhead)
+// - Header compression (HPACK)
+// - Server push support
+```
+
+**⚠️ Requirements:**
+- libcurl 7.65.0+ (older versions have multiplexing bugs)
+- Server must support HTTP/2
+
+---
+
+#### `withTcpKeepAlive(bool $enable = true): self`
+
+Enables TCP keep-alive to detect dead connections.
+
+**Parameters:**
+- `$enable` (default: true): Enable or disable TCP keep-alive
+
+**Returns:** New instance with TCP keep-alive configuration
+
+**Example:**
+```php
+$http = HttpPromise::create()
+    ->withTcpKeepAlive(true);
+
+// Prevents idle connections from being killed by firewalls
+$http->get('/long-polling')->wait();
+```
+
+---
+
+#### `withMaxPoolSize(int $size): self`
+
+Sets maximum connection pool size per host.
+
+**Parameters:**
+- `$size`: Max connections per host (0 = disable pooling)
+
+**Returns:** New instance with updated pool size
+
+**Example:**
+```php
+// Optimize for high throughput
+$http = HttpPromise::create()
+    ->withMaxPoolSize(100);
+
+// Disable pooling (multi-tenant isolation)
+$http = $http->withMaxPoolSize(0);
+
+// Conservative pooling
+$http = $http->withMaxPoolSize(10);
+```
+
+---
+
+#### `withMaxConcurrent(int $limit): self`
+
+Limits maximum concurrent requests (excess requests are queued).
+
+**Parameters:**
+- `$limit`: Max simultaneous requests
+
+**Returns:** New instance with concurrency limit
+
+**Example:**
+```php
+$http = HttpPromise::create()
+    ->withMaxConcurrent(10);  // Max 10 at once
+
+// Make 1000 requests
+for ($i = 0; $i < 1000; $i++) {
+    $http->get("https://api.example.com/item/$i");
+}
+
+// Only 10 execute simultaneously, rest are queued
+$http->wait();
+```
+
+---
+
+#### `withMiddleware(callable $middleware): self`
+
+Adds middleware to request/response pipeline.
+
+**Parameters:**
+- `$middleware`: Callable `function(array $request, callable $next): PromiseInterface`
+
+**Returns:** New instance with added middleware
+
+**Example:**
+```php
+// Logging middleware
+$loggingMiddleware = function (array $request, callable $next) {
+    echo "[{$request['method']}] {$request['url']}\n";
+    
+    return $next($request)->then(function ($response) {
+        echo "✅ {$response->getStatusCode()}\n";
+        return $response;
+    });
+};
+
+$http = HttpPromise::create()
+    ->withMiddleware($loggingMiddleware);
+
+// Retry middleware
+$retryMiddleware = function (array $request, callable $next) {
+    return $next($request)->catch(function ($e) use ($request, $next) {
+        if ($e instanceof TimeoutException) {
+            echo "Retrying after timeout...\n";
+            return $next($request);  // Retry once
+        }
+        throw $e;
+    });
+};
+
+$http = $http->withMiddleware($retryMiddleware);
+```
+
+---
+
+#### `withMiddlewares(array $middlewares): self`
+
+Adds multiple middlewares at once.
+
+**Parameters:**
+- `$middlewares`: Array of middleware callables
+
+**Returns:** New instance with all middlewares added
+
+**Example:**
+```php
+$http = HttpPromise::create()->withMiddlewares([
+    $authMiddleware,
+    $loggingMiddleware,
+    $rateLimitMiddleware,
+    $cachingMiddleware,
+]);
+```
+
+---
+
+### 🌐 HTTP Request Methods
+
+All request methods return a **PromiseInterface** that must be resolved with `wait()` or chained with `then()`.
+
+---
+
+#### `get(string $url, array $headers = [], array $queryParams = []): PromiseInterface`
+
+Sends an HTTP GET request.
+
+**Parameters:**
+- `$url`: Request URL (absolute or relative to baseUrl)
+- `$headers`: Additional headers for this request
+- `$queryParams`: Query string parameters
+
+**Returns:** Promise that resolves to PSR-7 ResponseInterface
+
+**Example:**
+```php
+$http = HttpPromise::create()
+    ->withBaseUrl('https://api.github.com');
+
+// Simple GET
+$response = $http->get('/users/octocat')->wait();
+
+// With query parameters
+$response = $http->get('/search/users', [], [
+    'q' => 'location:San Francisco',
+    'per_page' => 50,
+])->wait();
+// URL: /search/users?q=location%3ASan+Francisco&per_page=50
+
+// With custom headers
+$response = $http->get('/repos/php/php-src', [
+    'Accept' => 'application/vnd.github.v3+json',
+])->wait();
+
+// Promise chaining
+$users = $http->get('/users')
+    ->then(fn($response) => json_decode($response->getBody()->getContents(), true))
+    ->then(fn($data) => array_column($data, 'login'))
+    ->wait();
+```
+
+---
+
+#### `post(string $url, array $body = [], array $headers = []): PromiseInterface`
+
+Sends an HTTP POST request.
+
+**Parameters:**
+- `$url`: Request URL
+- `$body`: Request body (array auto-encoded based on content type)
+- `$headers`: Additional headers
+
+**Returns:** Promise that resolves to ResponseInterface
+
+**Example:**
+```php
+$http = HttpPromise::create()->asJson();
+
+// Create resource
+$response = $http->post('/users', [
+    'name' => 'John Doe',
+    'email' => 'john@example.com',
+])->wait();
+
+// Form submission
+$http = HttpPromise::create()->asForm();
+$response = $http->post('/login', [
+    'username' => 'john',
+    'password' => 'secret',
+])->wait();
+
+// With custom headers
+$response = $http->post('/webhooks', ['event' => 'user.created'], [
+    'X-Webhook-Signature' => hash_hmac('sha256', $body, $secret),
+])->wait();
+```
+
+**⚠️ Note:** POST requests are **never retried** (non-idempotent).
+
+---
+
+#### `put(string $url, array $body = [], array $headers = []): PromiseInterface`
+
+Sends an HTTP PUT request (idempotent update).
+
+**Parameters:**
+- `$url`: Request URL
+- `$body`: Request body
+- `$headers`: Additional headers
+
+**Returns:** Promise that resolves to ResponseInterface
+
+**Example:**
+```php
+$http = HttpPromise::create()->asJson();
+
+// Full resource update (idempotent)
+$response = $http->put('/users/123', [
+    'name' => 'Jane Doe',
+    'email' => 'jane@example.com',
+    'status' => 'active',
+])->wait();
+
+// Safe to retry on failure
+$http = $http->withRetry(3, 1.0);
+$http->put('/users/123', $userData)->wait();  // Retries automatically
+```
+
+**✅ Safe to retry:** PUT is idempotent.
+
+---
+
+#### `patch(string $url, array $body = [], array $headers = []): PromiseInterface`
+
+Sends an HTTP PATCH request (partial update).
+
+**Parameters:**
+- `$url`: Request URL
+- `$body`: Partial update data
+- `$headers`: Additional headers
+
+**Returns:** Promise that resolves to ResponseInterface
+
+**Example:**
+```php
+$http = HttpPromise::create()->asJson();
+
+// Partial update
+$response = $http->patch('/users/123', [
+    'email' => 'newemail@example.com',  // Only update email
+])->wait();
+```
+
+**⚠️ Note:** PATCH requests are **never retried** (non-idempotent).
+
+---
+
+#### `delete(string $url, array $headers = []): PromiseInterface`
+
+Sends an HTTP DELETE request.
+
+**Parameters:**
+- `$url`: Request URL
+- `$headers`: Additional headers
+
+**Returns:** Promise that resolves to ResponseInterface
+
+**Example:**
+```php
+$http = HttpPromise::create();
+
+// Delete resource
+$response = $http->delete('/users/123')->wait();
+
+// With authorization
+$response = $http->delete('/admin/users/123', [
+    'X-Admin-Token' => $adminToken,
+])->wait();
+```
+
+**✅ Safe to retry:** DELETE is idempotent.
+
+---
+
+#### `head(string $url, array $headers = []): PromiseInterface`
+
+Sends an HTTP HEAD request (metadata only, no body).
+
+**Parameters:**
+- `$url`: Request URL
+- `$headers`: Additional headers
+
+**Returns:** Promise that resolves to ResponseInterface (empty body)
+
+**Example:**
+```php
+$http = HttpPromise::create();
+
+// Check if resource exists
+$response = $http->head('/users/123')->wait();
+if ($response->getStatusCode() === 200) {
+    echo "User exists\n";
+}
+
+// Get file metadata
+$response = $http->head('https://example.com/large-file.zip')->wait();
+$fileSize = $response->getHeaderLine('Content-Length');
+$lastModified = $response->getHeaderLine('Last-Modified');
+```
+
+---
+
+#### `options(string $url, array $headers = []): PromiseInterface`
+
+Sends an HTTP OPTIONS request (CORS preflight, capability check).
+
+**Parameters:**
+- `$url`: Request URL
+- `$headers`: Additional headers
+
+**Returns:** Promise that resolves to ResponseInterface
+
+**Example:**
+```php
+$http = HttpPromise::create();
+
+// Check CORS
+$response = $http->options('/api/users')->wait();
+$allowedMethods = $response->getHeaderLine('Allow');
+echo "Allowed methods: $allowedMethods\n";  // GET, POST, PUT, DELETE
+
+// CORS preflight
+$response = $http->options('/api/users', [
+    'Access-Control-Request-Method' => 'POST',
+    'Access-Control-Request-Headers' => 'X-Custom-Header',
+])->wait();
+```
+
+---
+
+#### `request(string $method, string $url, array $options = []): PromiseInterface`
+
+Generic HTTP request method for custom verbs or advanced options.
+
+**Parameters:**
+- `$method`: HTTP method (GET, POST, CUSTOM, etc.)
+- `$url`: Request URL
+- `$options`: Array with keys: `headers`, `body`, `query`
+
+**Returns:** Promise that resolves to ResponseInterface
+
+**Example:**
+```php
+$http = HttpPromise::create();
+
+// Custom HTTP method
+$response = $http->request('PROPFIND', '/webdav/files', [
+    'headers' => ['Depth' => '1'],
+])->wait();
+
+// Complex request
+$response = $http->request('POST', '/api/users', [
+    'headers' => [
+        'Content-Type' => 'application/json',
+        'X-Request-ID' => uniqid(),
+    ],
+    'body' => json_encode(['name' => 'John']),
+    'query' => ['notify' => 'true'],
+])->wait();
+```
+
+---
+
+#### `json(string $method, string $url, array $data = [], array $headers = []): PromiseInterface`
+
+Convenience method for JSON requests.
+
+**Parameters:**
+- `$method`: HTTP method
+- `$url`: Request URL
+- `$data`: Data to JSON-encode
+- `$headers`: Additional headers
+
+**Returns:** Promise that resolves to ResponseInterface
+
+**Example:**
+```php
+$http = HttpPromise::create();
+
+// Automatic JSON encoding
+$response = $http->json('POST', '/api/users', [
+    'name' => 'John Doe',
+    'metadata' => ['role' => 'admin'],
+])->wait();
+
+// Equivalent to:
+$http->asJson()->post('/api/users', ['name' => 'John Doe'])->wait();
+```
+
+---
+
+### 🔄 Concurrency Methods
+
+---
+
+#### `concurrent(array $requests): PromiseInterface`
+
+Executes multiple requests in parallel and returns results as associative array.
+
+**Parameters:**
+- `$requests`: Associative array of request configurations
+
+**Returns:** Promise that resolves to `array<string, ResponseInterface>`
+
+**Example:**
+```php
+$http = HttpPromise::create()->withMaxConcurrent(10);
+
+$results = $http->concurrent([
+    'users' => [
+        'method' => 'GET',
+        'url' => 'https://api.example.com/users',
+    ],
+    'posts' => [
+        'method' => 'GET',
+        'url' => 'https://api.example.com/posts',
+        'headers' => ['X-Include' => 'comments'],
+    ],
+    'stats' => [
+        'method' => 'POST',
+        'url' => 'https://api.example.com/stats',
+        'body' => ['metric' => 'pageviews'],
+    ],
+])->wait();
+
+// Access by key
+$users = json_decode($results['users']->getBody()->getContents(), true);
+$posts = json_decode($results['posts']->getBody()->getContents(), true);
+$stats = json_decode($results['stats']->getBody()->getContents(), true);
+```
+
+**Error Handling:**
+```php
+$http->concurrent($requests)
+    ->catch(function ($error) {
+        // If ANY request fails, promise rejects
+        echo "One request failed: " . $error->getMessage();
+    })
+    ->wait();
+```
+
+---
+
+#### `race(array $requests): PromiseInterface`
+
+Executes requests in parallel, returns the **first successful response**.
+
+**Parameters:**
+- `$requests`: Associative array of request configurations
+
+**Returns:** Promise that resolves to first successful ResponseInterface
+
+**Example:**
+```php
+$http = HttpPromise::create();
+
+// Query redundant servers, use fastest
+$response = $http->race([
+    'primary' => [
+        'method' => 'GET',
+        'url' => 'https://api1.example.com/data',
+    ],
+    'secondary' => [
+        'method' => 'GET',
+        'url' => 'https://api2.example.com/data',
+    ],
+    'tertiary' => [
+        'method' => 'GET',
+        'url' => 'https://api3.example.com/data',
+    ],
+])->wait();
+
+echo "Fastest server responded!\n";
+
+// Fallback pattern
+$response = $http->race([
+    'cache' => ['method' => 'GET', 'url' => 'http://cache.local/data'],
+    'origin' => ['method' => 'GET', 'url' => 'https://api.example.com/data'],
+])->wait();
+```
+
+---
+
+### ⏱️ Event Loop Control
+
+---
+
+#### `tick(): void`
+
+Processes pending requests in the event loop (non-blocking).
+
+**Returns:** void
+
+**Example:**
+```php
+$http = HttpPromise::create();
+
+// Start async requests
+$promise1 = $http->get('https://api1.example.com/data');
+$promise2 = $http->get('https://api2.example.com/data');
+
+// Manual event loop
+while ($http->hasPending()) {
+    $http->tick();  // Process events
+    
+    // Do other work
+    echo "Working...\n";
+    usleep(10000);
+}
+
+// Wait for results
+$result1 = $promise1->wait();
+$result2 = $promise2->wait();
+```
+
+---
+
+#### `wait(?float $timeout = null): void`
+
+Blocks until all pending requests complete or timeout.
+
+**Parameters:**
+- `$timeout` (optional): Maximum wait time in seconds
+
+**Returns:** void
+
+**Throws:** `TimeoutException` if timeout is exceeded
+
+**Example:**
+```php
+$http = HttpPromise::create();
+
+// Start requests
+$http->get('https://api.example.com/users');
+$http->get('https://api.example.com/posts');
+
+// Wait for ALL to complete
+$http->wait();
+
+// With timeout
+try {
+    $http->wait(5.0);  // Max 5 seconds
+} catch (TimeoutException $e) {
+    echo "Requests took too long!\n";
+}
+```
+
+---
+
+#### `hasPending(): bool`
+
+Checks if there are pending requests in the event loop.
+
+**Returns:** true if requests are pending, false otherwise
+
+**Example:**
+```php
+$http = HttpPromise::create();
+
+$http->get('https://api.example.com/data');
+
+if ($http->hasPending()) {
+    echo "Waiting for requests...\n";
+    $http->wait();
+}
+```
+
+---
+
+### 📊 Monitoring & Metrics
+
+---
+
+#### `getMetrics(): array`
+
+Returns performance metrics for completed requests.
+
+**Returns:** Array with metrics
+
+**Example:**
+```php
+$http = HttpPromise::create();
+
+// Make requests
+for ($i = 0; $i < 100; $i++) {
+    $http->get("https://api.example.com/item/$i");
+}
+$http->wait();
+
+// Get metrics
+$metrics = $http->getMetrics();
+print_r($metrics);
+/*
+[
+    'total_requests' => 100,
+    'successful_requests' => 98,
+    'failed_requests' => 2,
+    'pending_requests' => 0,
+    'queued_requests' => 0,
+    'uptime_seconds' => 5.234,
+    'requests_per_second' => 19.11,
+    'success_rate' => 98.0,
+]
+*/
+
+// Monitoring
+if ($metrics['success_rate'] < 95.0) {
+    alert("API success rate dropped below 95%!");
+}
+```
+
+---
+
+#### `pendingCount(): int`
+
+Returns number of currently executing requests.
+
+**Returns:** Count of pending requests
+
+**Example:**
+```php
+$http = HttpPromise::create()->withMaxConcurrent(10);
+
+for ($i = 0; $i < 100; $i++) {
+    $http->get("https://api.example.com/item/$i");
+    
+    echo "Pending: " . $http->pendingCount() . "\n";  // Max 10
+}
+```
+
+---
+
+#### `queuedCount(): int`
+
+Returns number of requests waiting in queue.
+
+**Returns:** Count of queued requests
+
+**Example:**
+```php
+$http = HttpPromise::create()->withMaxConcurrent(5);
+
+for ($i = 0; $i < 20; $i++) {
+    $http->get("https://api.example.com/item/$i");
+}
+
+echo "Pending: " . $http->pendingCount() . "\n";  // 5
+echo "Queued: " . $http->queuedCount() . "\n";    // 15
+
+$http->wait();
+
+echo "Queued: " . $http->queuedCount() . "\n";    // 0
+```
+
+---
+
+### 🔧 Utility Methods
+
+---
+
+#### `getOptions(): RequestOptions`
+
+Returns current RequestOptions configuration.
+
+**Returns:** RequestOptions object
+
+**Example:**
+```php
+$http = HttpPromise::create()
+    ->withBaseUrl('https://api.example.com')
+    ->withTimeout(30.0);
+
+$options = $http->getOptions();
+
+// Inspect configuration
+$baseUrl = $options->baseUrl;
+$timeout = $options->timeout;
+
+echo "Base URL: $baseUrl\n";
+echo "Timeout: $timeout seconds\n";
+```
+
+---
+
+#### `__destruct(): void`
+
+Destructor - automatically closes all cURL handles and cleans up resources.
+
+**Example:**
+```php
+$http = HttpPromise::create();
+
+// Make requests...
+$http->get('/data')->wait();
+
+// Automatically cleaned up when object is destroyed
+unset($http);  // Explicitly destroy (optional)
+```
+
+---
+
+## 🏗️ Promise API
+
+The Promise class implements Promise/A+ specification with additional utilities.
+
+### Promise Methods
+
+#### `then(callable $onFulfilled = null, callable $onRejected = null): PromiseInterface`
+
+Attaches fulfillment and rejection handlers.
+
+**Example:**
+```php
+$promise->then(
+    fn($value) => "Success: $value",
+    fn($error) => "Error: {$error->getMessage()}"
+);
+```
+
+---
+
+#### `catch(callable $onRejected): PromiseInterface`
+
+Attaches rejection handler (shortcut for `then(null, $onRejected)`).
+
+**Example:**
+```php
+$promise->catch(fn($error) => handleError($error));
+```
+
+---
+
+#### `finally(callable $onFinally): PromiseInterface`
+
+Executes callback regardless of fulfillment or rejection.
+
+**Example:**
+```php
+$promise->finally(fn() => cleanup());
+```
+
+---
+
+#### `wait(?float $timeout = null): mixed`
+
+Blocks until promise resolves and returns value.
+
+**Example:**
+```php
+$result = $promise->wait(10.0);  // Wait max 10 seconds
+```
+
+---
+
+### Promise Static Methods
+
+#### `Promise::resolve(mixed $value): PromiseInterface`
+
+Creates immediately fulfilled promise.
+
+**Example:**
+```php
+$promise = Promise::resolve(42);
+$value = $promise->wait();  // 42
+```
+
+---
+
+#### `Promise::reject(Throwable $reason): PromiseInterface`
+
+Creates immediately rejected promise.
+
+**Example:**
+```php
+$promise = Promise::reject(new Exception('Error'));
+$promise->catch(fn($e) => echo $e->getMessage());
+```
+
+---
+
+#### `Promise::all(array $promises): PromiseInterface`
+
+Waits for ALL promises to fulfill (fails fast on first rejection).
+
+**Example:**
+```php
+$promises = [
+    $http->get('/users'),
+    $http->get('/posts'),
+    $http->get('/comments'),
+];
+
+$results = Promise::all($promises)->wait();
+// [$usersResponse, $postsResponse, $commentsResponse]
+```
+
+---
+
+#### `Promise::any(array $promises): PromiseInterface`
+
+Returns first fulfilled promise (ignores rejections until all fail).
+
+**Example:**
+```php
+$first = Promise::any([
+    $http->get('https://slow-api.com/data'),
+    $http->get('https://fast-api.com/data'),
+])->wait();
+```
+
+---
+
+#### `Promise::race(array $promises): PromiseInterface`
+
+Returns first settled promise (fulfilled OR rejected).
+
+**Example:**
+```php
+$fastest = Promise::race([
+    $http->get('https://api1.com/data'),
+    $http->get('https://api2.com/data'),
+])->wait();
+```
+
+---
+
+#### `Promise::delay(float $seconds, mixed $value = null): PromiseInterface`
+
+Creates promise that resolves after delay.
+
+**Example:**
+```php
+Promise::delay(2.0, 'Ready!')
+    ->then(fn($msg) => echo $msg)
+    ->wait();  // Waits 2 seconds, then echoes "Ready!"
+```
+
+---
+
+## 🔒 Security Best Practices
+
+See [Security](#-security-best-practices) section above for comprehensive security guide.
 | `withBasicAuth(string, string)` | Set Basic auth | `self` |
 
 #### Content Type
@@ -945,9 +2197,265 @@ $http->get('http://169.254.169.254/metadata'); // AWS metadata
 
 // ✅ Use public domains
 $http->get('https://api.example.com/data');
+---
+
+## ⚡ Performance
+
+HttpPromise is optimized for production workloads:
+
+### Benchmarks
+
+Environment:
+- PHP 8.4.15
+- libcurl 7.81.0 with HTTP/2
+- 2 iterations per benchmark
+- httpbin.org as test endpoint
+
+| Benchmark | HttpPromise | Guzzle | Winner | Improvement |
+|-----------|-------------|--------|---------|-------------|
+| Simple GET | 135.79 ms | 137.22 ms | **🏆 HttpPromise** | +1.1% |
+| POST JSON | 137.05 ms | 209.24 ms | **🏆 HttpPromise** | +52.7% |
+| **Concurrent x5** | **136.98 ms** | **474.07 ms** | **🏆 HttpPromise** | **+246.1%** |
+| Sequential x5 | 702.45 ms | 823.99 ms | **🏆 HttpPromise** | +17.3% |
+| JSON Decode | 135.82 ms | 136.59 ms | **🏆 HttpPromise** | +0.6% |
+| **Concurrent x10** | **241.07 ms** | **629.95 ms** | **🏆 HttpPromise** | **+161.3%** |
+| Delayed (1s) | 1541.38 ms | 1154.07 ms | 🏆 Guzzle | -25.1% |
+
+**Overall: HttpPromise wins 6/7 benchmarks and is 15% faster overall!**
+
+### Key Performance Features
+
+🚀 **Connection Pooling**
+- Reuses cURL handles (eliminates connection overhead)
+- Pooled per host (secure + fast)
+- Configurable pool size
+
+⚡ **HTTP/2 Multiplexing**
+- Single TCP connection for multiple requests
+- Header compression (HPACK)
+- Parallel streams
+
+🎯 **Event Loop Optimization**
+- Adaptive select timeouts
+- Zero-copy operations
+- Non-blocking retry delays
+
+📦 **Zero Dependencies**
+- No Guzzle, Symfony, or other heavy frameworks
+- Only ext-curl (native C extension)
+- Smaller memory footprint
+
+### Run Benchmarks
+
+```bash
+# Full benchmark suite
+php benchmark.php
+
+# Simple benchmark (fewer iterations)
+php benchmark_simple.php
 ```
 
-#### 5. Headers Rejected: "Invalid header value"
+### Performance Tips
+
+✅ **DO:**
+- Reuse HttpPromise instances
+- Enable HTTP/2 for same-host requests
+- Use concurrent() for parallel requests
+- Set appropriate concurrency limits
+- Monitor metrics in production
+
+❌ **DON'T:**
+- Create new instances per request
+- Set maxConcurrent too high (overwhelms servers)
+- Disable connection pooling without reason
+- Use blocking operations in event loop
+
+---
+
+## 🏗️ Architecture
+
+After refactoring, HttpPromise now follows a clean separation of concerns:
+
+```
+src/
+├── HttpPromise.php              # Main client - orchestrates components
+│   ├── Request lifecycle management
+│   ├── Middleware pipeline
+│   ├── Public API (get, post, concurrent, etc.)
+│   └── Event loop integration
+│
+├── Http/
+│   ├── RequestOptions.php       # Immutable configuration
+│   ├── HttpProcessorTrait.php   # Header/body processing + sanitization
+│   ├── ConnectionPool.php       # Connection pooling per host
+│   ├── EventLoop.php            # Request queue + event loop
+│   ├── RetryHandler.php         # Retry logic with exponential backoff
+│   ├── Metrics.php              # Performance tracking
+│   └── UrlValidator.php         # SSRF protection + URL validation
+│
+├── Promise/
+│   ├── PromiseInterface.php     # Promise/A+ contract
+│   ├── Promise.php              # Implementation (then/catch/finally)
+│   └── Deferred.php             # Deferred pattern (resolve/reject)
+│
+└── Exception/
+    ├── PromiseException.php     # Base exception
+    ├── HttpException.php        # HTTP errors (with status code)
+    ├── TimeoutException.php     # Timeout errors
+    └── RejectionException.php   # Promise rejections
+```
+
+### Design Principles
+
+1. **Immutability**: All `with*()` methods return new instances
+2. **Type Safety**: Strict types, generics, PHPStan level 6
+3. **Security First**: SSRF protection, sanitization, isolation
+4. **Separation of Concerns**: Each class has a single responsibility
+5. **Performance**: Connection pooling, HTTP/2, event loop optimization
+6. **Developer Experience**: Fluent API, clear errors, comprehensive docs
+
+### Component Responsibilities
+
+**HttpPromise** - Main orchestrator
+- Public API surface
+- Middleware pipeline execution
+- Delegates to specialized components
+
+**ConnectionPool** - Connection management
+- Per-host connection pooling
+- Secure handle reset between uses
+- Configurable pool size
+
+**EventLoop** - Request execution
+- Manages pending/queued requests
+- cURL multi-handle operations
+- Concurrency limit enforcement
+
+**RetryHandler** - Retry logic
+- Idempotent method detection
+- Exponential backoff
+- Configurable status codes
+
+**Metrics** - Performance tracking
+- Request counters
+- Success rate calculation
+- Throughput metrics
+
+**UrlValidator** - Security
+- SSRF prevention
+- Private IP blocking
+- Protocol whitelist
+
+---
+
+## 🔧 Troubleshooting
+
+### "Promise could not be resolved"
+
+**Cause:** Promise timeout or missing event loop integration.
+
+**Solution:**
+```php
+// ✅ Increase timeout
+$http = HttpPromise::create()
+    ->withTimeout(60.0);
+
+// ✅ Use explicit wait with timeout
+$promise->wait(120.0);
+
+// ✅ Check if pending
+if ($http->hasPending()) {
+    $http->wait();
+}
+```
+
+---
+
+### HTTP/2 Not Working
+
+**Check support:**
+```bash
+php -r "echo (curl_version()['features'] & CURL_VERSION_HTTP2) ? '✅ Supported' : '❌ Not available';"
+php -r "echo 'libcurl: ' . curl_version()['version'];"
+```
+
+**Requirements:**
+- libcurl 7.65.0+ (older versions have multiplexing bugs)
+- Compiled with nghttp2 support
+
+**Enable:**
+```php
+$http = HttpPromise::create()->withHttp2(true);
+```
+
+---
+
+### Connection Pool Not Reusing
+
+**Cause:** Creating new HttpPromise instances per request.
+
+**Solution:**
+```php
+// ✅ CORRECT - reuses connections
+$http = HttpPromise::create()->withBaseUrl('https://api.example.com');
+for ($i = 0; $i < 100; $i++) {
+    $http->get("/item/$i");
+}
+$http->wait();
+
+// ❌ WRONG - no connection reuse
+for ($i = 0; $i < 100; $i++) {
+    HttpPromise::create()->get("https://api.example.com/item/$i")->wait();
+}
+```
+
+---
+
+### "URL must start with http:// or https://"
+
+**Cause:** Invalid URL or SSRF protection triggered.
+
+**Solution:**
+```php
+// ✅ Use full URLs
+$http->get('https://api.example.com/data')->wait();
+
+// ✅ Or set baseUrl
+$http = HttpPromise::create()
+    ->withBaseUrl('https://api.example.com');
+$http->get('/data')->wait();  // Combines to https://api.example.com/data
+
+// ❌ Private IPs are blocked (SSRF protection)
+$http->get('http://192.168.1.1/admin')->wait();  // Throws InvalidArgumentException
+```
+
+---
+
+### "Maximum retry attempts exceeded"
+
+**Cause:** Server consistently returning retryable status codes.
+
+**Solution:**
+```php
+// ✅ Increase retry attempts
+$http = $http->withRetry(5, 2.0);
+
+// ✅ Customize retryable status codes
+$http = $http->withRetry(3, 1.0, [429, 503]);  // Only retry these
+
+// ✅ Add circuit breaker middleware
+$circuitBreaker = function ($request, $next) {
+    if (tooManyFailures()) {
+        throw new Exception('Circuit breaker open');
+    }
+    return $next($request);
+};
+$http = $http->withMiddleware($circuitBreaker);
+```
+
+---
+
+### Headers Rejected: "Invalid header value"
 
 **Cause:** CRLF injection attempt detected.
 
@@ -989,7 +2497,7 @@ php benchmark.php
 ### Guidelines
 
 1. **Code Style**: Follow PSR-12
-2. **Tests**: Add tests for new features (maintain 100% coverage)
+2. **Tests**: Add tests for new features
 3. **Types**: Use strict types, generics, PHPDoc
 4. **Security**: Consider security implications
 5. **Performance**: Benchmark critical paths
@@ -1007,7 +2515,7 @@ php benchmark.php
 
 Include:
 - PHP version
-- libcurl version
+- libcurl version (`php -r "echo curl_version()['version'];"`)
 - Minimal reproduction example
 - Expected vs actual behavior
 
@@ -1024,7 +2532,7 @@ MIT License - see [LICENSE](LICENSE) file for details.
 - cURL multi-handle documentation
 - Promise/A+ specification
 - PSR-7 HTTP message interfaces
-- Security audit contributors
+- PHP community for feedback and contributions
 
 ---
 
@@ -1032,571 +2540,6 @@ MIT License - see [LICENSE](LICENSE) file for details.
 
 **Made with ❤️ by [Omegaalfa](https://github.com/omegaalfa)**
 
-[Report Bug](https://github.com/omegaalfa/http-promise/issues) · [Request Feature](https://github.com/omegaalfa/http-promise/issues) · [Documentation](https://github.com/omegaalfa/http-promise/wiki)
+[Report Bug](https://github.com/omegaalfa/http-promise/issues) · [Request Feature](https://github.com/omegaalfa/http-promise/issues)
 
 </div>
-
-## Features
-
-- 🚀 **Async HTTP requests** with cURL multi-handle
-- ⚡ **Promise/A+ like** implementation with `then`, `catch`, `finally`
-- 🔗 **Fluent API** for configuration (base URL, auth, headers, etc.)
-- 🔄 **Concurrent requests** with `concurrent()` and `race()`
-- 🔁 **Automatic retry** with configurable attempts and delays
-- � **Connection pooling** with cURL handle reuse (up to 50 connections)
-- 🎭 **Middleware support** for request/response interception
-- ⚡ **HTTP/2 multiplexing** with native cURL support
-- 🎚️ **Concurrency control** with configurable max concurrent requests
-- 📊 **Performance metrics** built-in (requests/sec, success rate, etc.)
-- �📦 **Zero external dependencies** (only ext-curl and PSR-7)
-- 🎯 **Full PSR-7** ResponseInterface compatibility
-
-## Installation
-
-```bash
-composer require omegaalfa/http-promise
-```
-
-## Requirements
-
-- PHP 8.4+
-- ext-curl (with HTTP/2 support for multiplexing features)
-- PSR-7 ResponseInterface implementation
-
-**For HTTP/2 Support:**
-- libcurl 7.43.0+ compiled with nghttp2
-- OpenSSL 1.0.2+ or equivalent TLS library
-
-Check HTTP/2 availability:
-```bash
-php -r "echo (curl_version()['features'] & CURL_VERSION_HTTP2) ? 'HTTP/2 supported' : 'HTTP/2 not available';"
-```
-
-## Quick Start
-
-```php
-use Omegaalfa\HttpPromise\HttpPromise;
-use Nyholm\Psr7\Response;
-
-// Create client with fluent configuration
-$http = HttpPromise::create(new Response())
-    ->withBaseUrl('https://api.example.com')
-    ->withBearerToken('your-api-token')
-    ->asJson();
-
-// Async request
-$promise = $http->get('/users')
-    ->then(fn($response) => json_decode($response->getBody()->getContents(), true))
-    ->catch(fn($e) => ['error' => $e->getMessage()]);
-
-// Wait for result
-$users = $promise->wait();
-```
-
-## Usage Examples
-
-### Basic Requests
-
-```php
-$http = HttpPromise::create(new Response());
-
-// GET request
-$http->get('https://api.example.com/users')->wait();
-
-// POST request
-$http->post('https://api.example.com/users', ['name' => 'John'])->wait();
-
-// PUT request
-$http->put('https://api.example.com/users/1', ['name' => 'Jane'])->wait();
-
-// DELETE request
-$http->delete('https://api.example.com/users/1')->wait();
-```
-
-### Fluent Configuration
-
-```php
-$http = HttpPromise::create(new Response())
-    ->withBaseUrl('https://api.example.com')
-    ->withBearerToken('token')
-    ->withTimeout(30.0)
-    ->withRetry(3, 1.0)
-    ->asJson();
-
-// All requests inherit configuration
-$http->get('/users');        // → https://api.example.com/users
-$http->post('/users', $data); // With JSON content-type
-```
-
-### Authentication
-
-```php
-// Bearer Token
-$http = HttpPromise::create(new Response())
-    ->withBearerToken('your-token');
-
-// Basic Auth
-$http = HttpPromise::create(new Response())
-    ->withBasicAuth('username', 'password');
-
-// Custom Headers
-$http = HttpPromise::create(new Response())
-    ->withHeaders([
-        'X-API-Key' => 'your-key',
-        'X-Custom-Header' => 'value',
-    ]);
-```
-
-### JSON Requests
-
-```php
-$http = HttpPromise::create(new Response())
-    ->withBaseUrl('https://api.example.com')
-    ->asJson();
-
-// POST JSON
-$promise = $http->post('/users', [
-    'name' => 'John Doe',
-    'email' => 'john@example.com',
-]);
-
-// Or use json() method explicitly
-$promise = $http->json('POST', '/users', $data);
-```
-
-### Concurrent Requests
-
-```php
-$http = HttpPromise::create(new Response())
-    ->withBaseUrl('https://api.example.com');
-
-// Execute multiple requests in parallel
-$results = $http->concurrent([
-    'users' => ['method' => 'GET', 'url' => '/users'],
-    'posts' => ['method' => 'GET', 'url' => '/posts'],
-    'comments' => ['method' => 'GET', 'url' => '/comments'],
-])->wait();
-
-// Access results by key
-$users = $results['users'];
-$posts = $results['posts'];
-```
-
-### Race Requests
-
-```php
-// Get first response (useful for redundant endpoints)
-$response = $http->race([
-    'server1' => ['method' => 'GET', 'url' => 'https://server1.example.com/data'],
-    'server2' => ['method' => 'GET', 'url' => 'https://server2.example.com/data'],
-])->wait();
-```
-
-### Promise Chaining
-
-```php
-$http->get('/users/1')
-    ->then(function ($response) {
-        $user = json_decode($response->getBody()->getContents(), true);
-        return $user['name'];
-    })
-    ->then(function ($name) {
-        return strtoupper($name);
-    })
-    ->catch(function ($error) {
-        return 'Unknown User';
-    })
-    ->finally(function () {
-        echo "Request completed\n";
-    })
-    ->wait();
-```
-
-### Retry Configuration
-
-```php
-$http = HttpPromise::create(new Response())
-    ->withRetry(
-        attempts: 3,
-        delay: 1.0, // seconds
-        statusCodes: [429, 502, 503, 504]
-    );
-
-// Will retry up to 3 times on rate limit or server errors
-$response = $http->get('https://api.example.com/data')->wait();
-```
-
-### Advanced Options
-
-```php
-use Omegaalfa\HttpPromise\Http\RequestOptions;
-
-$options = RequestOptions::create()
-    ->withBaseUrl('https://api.example.com')
-    ->withTimeout(60.0)
-    ->withRetry(3, 2.0)
-    ->withHeaders(['Accept-Language' => 'en-US'])
-    ->asJson();
-
-$http = HttpPromise::create(new Response(), $options);
-```
-
-### Proxy & SSL
-
-```php
-$http = HttpPromise::create(new Response())
-    ->withProxy('http://proxy.example.com:8080')
-    ->withoutSSLVerification(); // For development only!
-```
-
-### Connection Pooling
-
-```php
-// Configure connection pool size (default: 50)
-$http = HttpPromise::create(new Response())
-    ->withMaxPoolSize(100); // Reuse up to 100 connections
-
-// Disable pooling (closes connections after use)
-$http = $http->withMaxPoolSize(0);
-
-// TCP keep-alive (enabled by default)
-$http = $http->withTcpKeepAlive(true);
-```
-
-### HTTP/2 Support
-
-```php
-// Enable HTTP/2 (if supported by libcurl)
-$http = HttpPromise::create(new Response())
-    ->withHttp2(true);
-
-// HTTP/2 provides:
-// - Multiplexing (multiple requests over single connection)
-// - Header compression
-// - Server push support
-```
-
-### Middleware System
-
-```php
-// Add request/response middleware
-$http = HttpPromise::create(new Response())
-    ->withMiddleware(function (array $request, callable $next) {
-        // Before request
-        echo "Sending {$request['method']} {$request['url']}\n";
-        
-        // Call next middleware/handler
-        $promise = $next($request);
-        
-        // After response
-        return $promise->then(function ($response) {
-            echo "Received status: {$response->getStatusCode()}\n";
-            return $response;
-        });
-    });
-
-// Add multiple middlewares
-$http = $http->withMiddlewares([
-    $loggingMiddleware,
-    $authMiddleware,
-    $retryMiddleware,
-]);
-```
-
-### Concurrency Control
-
-```php
-// Limit concurrent requests (default: 50)
-$http = HttpPromise::create(new Response())
-    ->withMaxConcurrent(10); // Only 10 requests in parallel
-
-// Requests beyond limit are queued automatically
-$promises = [];
-for ($i = 0; $i < 100; $i++) {
-    $promises[] = $http->get("/item/{$i}"); // Only 10 at a time
-}
-
-// Wait for all to complete
-$http->wait();
-```
-
-### Performance Metrics
-
-```php
-$http = HttpPromise::create(new Response());
-
-// Make some requests
-$http->get('/users')->wait();
-$http->post('/data', $payload)->wait();
-
-// Get performance metrics
-$metrics = $http->getMetrics();
-
-/*
-[
-    'total_requests' => 2,
-    'successful_requests' => 2,
-    'failed_requests' => 0,
-    'pending_requests' => 0,
-    'queued_requests' => 0,
-    'uptime_seconds' => 1.234,
-    'requests_per_second' => 1.62,
-    'success_rate' => 100.0,
-]
-*/
-```
-
-## Promise Static Methods
-
-```php
-use Omegaalfa\HttpPromise\Promise\Promise;
-
-// Wait for all promises
-$results = Promise::all([$promise1, $promise2, $promise3])->wait();
-
-// Race - first to complete
-$first = Promise::race([$promise1, $promise2])->wait();
-
-// Any - first to succeed
-$firstSuccess = Promise::any([$promise1, $promise2])->wait();
-
-// All settled - wait for all, including failures
-$outcomes = Promise::allSettled([$promise1, $promise2])->wait();
-
-// Create resolved/rejected promises
-$resolved = Promise::resolve($value);
-$rejected = Promise::reject(new Exception('error'));
-
-// Delay
-$delayed = Promise::delay(1.0)->then(fn() => 'after 1 second');
-```
-
-## Performance
-
-HttpPromise is designed for high-performance async HTTP operations:
-
-- **Connection Pooling**: Reuses cURL handles to avoid overhead of creating new connections
-- **HTTP/2 Multiplexing**: Multiple requests over single TCP connection (when supported)
-- **Event Loop Optimization**: Adaptive select timeouts based on load
-- **Zero-Copy**: Direct cURL multi-handle operations without intermediate buffers
-
-### Benchmarks
-
-Run the included benchmark suite:
-
-```bash
-php benchmark.php
-```
-
-**Results** (PHP 8.4.15, 2 iterations, httpbin.org):
-
-| Benchmark | HttpPromise | Guzzle | Winner |
-|-----------|-------------|--------|---------|
-| Simple GET | 135.79 ms | 137.22 ms | **🏆 HttpPromise** (+1.1%) |
-| POST JSON | 137.05 ms | 209.24 ms | **🏆 HttpPromise** (+52.7%) |
-| **Concurrent x5** | **136.98 ms** | **474.07 ms** | **🏆 HttpPromise** (+246.1%) |
-| Sequential x5 | 702.45 ms | 823.99 ms | **🏆 HttpPromise** (+17.3%) |
-| GET + JSON Decode | 135.82 ms | 136.59 ms | **🏆 HttpPromise** (+0.6%) |
-| **Concurrent x10** | **241.07 ms** | **629.95 ms** | **🏆 HttpPromise** (+161.3%) |
-| Delayed (1s) | 1541.38 ms | 1154.07 ms | 🏆 Guzzle (-25.1%) |
-
-**Overall**: HttpPromise wins **6/7 benchmarks** and is **15% faster overall** than Guzzle!
-
-**Key Highlights**:
-- ⚡ **Up to 246% faster** on concurrent requests (Concurrent x5)
-- 🚀 **161% faster** on 10 concurrent requests
-- 💨 **52% faster** on POST JSON requests
-- ♻️ Connection pooling makes dramatic difference in real-world scenarios
-- 📦 Zero external dependencies while outperforming full-featured libraries
-
-**Note**: Performance varies based on network conditions, server response times, and libcurl version.
-
-## Best Practices
-
-### 1. Reuse Client Instances
-```php
-// ✅ Good - reuses connections
-$http = HttpPromise::create(new Response())
-    ->withBaseUrl('https://api.example.com');
-
-for ($i = 0; $i < 100; $i++) {
-    $http->get("/item/{$i}");
-}
-$http->wait();
-
-// ❌ Bad - creates new client each time
-for ($i = 0; $i < 100; $i++) {
-    HttpPromise::create(new Response())->get("/item/{$i}")->wait();
-}
-```
-
-### 2. Use HTTP/2 for Same-Host Requests
-```php
-// ✅ Optimal for multiple requests to same domain
-$http = HttpPromise::create(new Response())
-    ->withHttp2(true) // Single connection, multiple streams
-    ->withBaseUrl('https://api.example.com');
-```
-
-### 3. Configure Concurrency Limits
-```php
-// ✅ Prevent overwhelming servers or hitting rate limits
-$http = HttpPromise::create(new Response())
-    ->withMaxConcurrent(10); // Respects server capacity
-```
-
-### 4. Use Middleware for Cross-Cutting Concerns
-```php
-// ✅ DRY principle - logging, auth, retry logic in one place
-$http = $http->withMiddlewares([
-    $loggingMiddleware,
-    $authRefreshMiddleware,
-    $retryMiddleware,
-]);
-```
-
-### 5. Monitor with Metrics
-```php
-// ✅ Track performance in production
-$metrics = $http->getMetrics();
-if ($metrics['success_rate'] < 95.0) {
-    // Alert or adjust retry strategy
-}
-```
-
-## Architecture
-
-```
-src/
-├── HttpPromise.php           # Main HTTP client (event loop, pooling, middleware)
-├── Http/
-│   ├── RequestOptions.php    # Immutable configuration (HTTP/2, pooling, etc.)
-│   └── HttpProcessorTrait.php # Header/body processing
-├── Promise/
-│   ├── PromiseInterface.php  # Promise contract
-│   ├── Promise.php           # Promise/A+ implementation
-│   └── Deferred.php          # Deferred pattern
-└── Exception/
-    ├── PromiseException.php  # Base exception
-    ├── HttpException.php     # HTTP errors
-    ├── TimeoutException.php  # Timeout errors
-    └── RejectionException.php # Promise rejections
-```
-
-## API Reference
-
-### HttpPromise Methods
-
-| Method                                        | Description |
-|-----------------------------------------------|-------------|
-| `create(?ResponseInterface, ?RequestOptions)` | Factory method |
-| `withBaseUrl(string)`                         | Set base URL |
-| `withBearerToken(string)`                     | Set Bearer auth |
-| `withBasicAuth(string, string)`               | Set Basic auth |
-| `withHeaders(array)`                          | Add headers |
-| `withTimeout(float)`                          | Set timeout |
-| `withRetry(int, float, array)`                | Configure retry |
-| `withProxy(string)`                           | Set proxy |
-| `withoutSSLVerification()`                    | Disable SSL verify |
-| `withHttp2(bool)`                             | Enable HTTP/2 |
-| `withTcpKeepAlive(bool)`                      | Enable TCP keep-alive |
-| `withMaxPoolSize(int)`                        | Set connection pool size |
-| `withMaxConcurrent(int)`                      | Set max concurrent requests |
-| `withMiddleware(callable)`                    | Add middleware |
-| `withMiddlewares(array)`                      | Add multiple middlewares |
-| `asJson()`                                    | Configure for JSON |
-| `asForm()`                                    | Configure for forms |
-| `get(url, headers, query)`                    | GET request |
-| `post(url, body, headers)`                    | POST request |
-| `put(url, body, headers)`                     | PUT request |
-| `patch(url, body, headers)`                   | PATCH request |
-| `delete(url, body, headers)`                  | DELETE request |
-| `concurrent(array)`                           | Parallel requests |
-| `race(array)`                                 | Race requests |
-| `wait(?timeout)`                              | Wait for all pending |
-| `tick()`                                      | Process one event loop tick |
-| `hasPending()`                                | Check if has pending requests |
-| `pendingCount()`                              | Get pending request count |
-| `queuedCount()`                               | Get queued request count |
-| `getMetrics()`                                | Get performance metrics |
-
-### PromiseInterface Methods
-
-| Method | Description |
-|--------|-------------|
-| `then(?callable, ?callable)` | Chain handlers |
-| `catch(callable)` | Handle rejection |
-| `finally(callable)` | Always execute |
-| `wait(?float)` | Wait for resolution |
-| `getState()` | Get current state |
-| `isPending()` | Check if pending |
-| `isFulfilled()` | Check if fulfilled |
-| `isRejected()` | Check if rejected |
-
-## Troubleshooting
-
-### Promise Timeout Error
-```
-TimeoutException: Promise could not be resolved
-```
-
-**Causes:**
-- Promise not linked to HttpPromise event loop (missing `waitFn`)
-- Network timeout shorter than request completion time
-
-**Solutions:**
-```php
-// ✅ Increase timeout
-$http = $http->withTimeout(60.0);
-
-// ✅ Use HttpPromise methods directly (auto-wires event loop)
-$promise = $http->concurrent($requests); // ✅ Has waitFn
-```
-
-### HTTP/2 Not Working
-
-**Check support:**
-```bash
-php -r "var_dump(curl_version());"
-```
-
-Look for `HTTP2` in features bitmask.
-
-**Enable in HttpPromise:**
-```php
-$http = $http->withHttp2(true);
-```
-
-### Connection Pool Not Reusing
-
-**Ensure:**
-1. Same HttpPromise instance across requests
-2. Pool size > 0 (default: 50)
-3. No manual curl handle closing
-
-```php
-// ✅ Correct
-$http = HttpPromise::create();
-for ($i = 0; $i < 100; $i++) {
-    $http->get("/item/{$i}");
-}
-
-// ❌ Wrong - creates new instance each time
-for ($i = 0; $i < 100; $i++) {
-    HttpPromise::create(new Response())->get("/item/{$i}")->wait();
-}
-```
-
-## Contributing
-
-Contributions are welcome! Please:
-
-1. Fork the repository
-2. Create a feature branch
-3. Add tests for new functionality
-4. Run `./vendor/bin/phpunit`
-5. Submit a pull request
-
-## License
-
-MIT License - see [LICENSE](LICENSE) file.

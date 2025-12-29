@@ -191,23 +191,6 @@ class PromiseTest extends TestCase
         $all->wait();
     }
 
-    public function testPromiseAllSettled(): void
-    {
-        $promise1 = Promise::resolve('success');
-        $promise2 = Promise::reject(new \Exception('error'));
-        $promise3 = Promise::resolve('another success');
-
-        $allSettled = Promise::allSettled([$promise1, $promise2, $promise3]);
-        $results = $allSettled->wait();
-
-        $this->assertCount(3, $results);
-        $this->assertEquals('fulfilled', $results[0]['status']);
-        $this->assertEquals('success', $results[0]['value']);
-        $this->assertEquals('rejected', $results[1]['status']);
-        $this->assertInstanceOf(\Exception::class, $results[1]['reason']);
-        $this->assertEquals('fulfilled', $results[2]['status']);
-    }
-
     public function testPromiseAny(): void
     {
         $promise1 = Promise::reject(new \Exception('error1'));
@@ -314,13 +297,6 @@ class PromiseTest extends TestCase
         $race->wait();
     }
 
-    public function testPromiseAllSettledEmpty(): void
-    {
-        $promise = Promise::allSettled([]);
-        $result = $promise->wait();
-        
-        $this->assertEquals([], $result);
-    }
 
     public function testPromiseAnyEmpty(): void
     {
